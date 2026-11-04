@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="QuizzApp.BLL/QuizzApp.BLL.csproj" Id="9d1845c7-8884-4ba6-a268-7a1279d63282" />
+  <Project Path="QuizzApp.DAL/QuizzApp.DAL.csproj" Id="6df21f55-8d2e-4b22-85a2-15c311ff1581" />
+  <Project Path="QuizzApp.GUI/QuizzApp.GUI.csproj" Id="dcb51178-4036-4919-9ecc-0db4af899032" />
+</Solution>
