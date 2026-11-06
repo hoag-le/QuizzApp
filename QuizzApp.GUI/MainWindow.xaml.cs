@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -298,11 +298,12 @@ namespace QuizzApp.GUI
 
         private void BtnClearHistory_Click(object sender, RoutedEventArgs e)
         {
-            var res = MessageBox.Show("Bạn có chắc chắn muốn xóa toàn bộ lịch sử làm bài không?",
+            var res = MessageBox.Show("Bạn có chắc chắn muốn xóa toàn bộ lịch sử làm bài của mình không?",
                 "Xác nhận xóa", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (res == MessageBoxResult.Yes)
             {
-                QuizService.ClearExamHistory();
+                int? uid = SessionManager.CurrentUser != null ? (int?)SessionManager.CurrentUser.Id : null;
+                QuizService.ClearExamHistory(uid);
                 LoadHistoryView();
                 UpdateHeaderStatsBadge();
             }

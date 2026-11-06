@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 
 using QuizzApp.BLL;
 
@@ -17,15 +18,32 @@ namespace QuizzApp.GUI
         public LoginWindow()
         {
             InitializeComponent();
+            UpdateServerStatusBadge();
+            LoadRememberedUser();
+
             try
             {
                 QuizService.InitializeDatabase();
-                LoadRememberedUser();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Lỗi khởi tạo cơ sở dữ liệu: {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+                OpenServerConfigPanel();
+                ShowServerConfigMessage(
+                    string.Format("Không kết nối được tới MySQL ({0}). Vui lòng kiểm tra IP máy chủ LAN hoặc cấu hình kết nối bên dưới.\nChi tiết: {1}",
+                        QuizService.GetServerSummaryText(), ex.Message),
+                    isError: true);
             }
+        }
+
+        private void UpdateServerStatusBadge()
+        {
+            QuizService.GetServerConfig(out string host, out string port, out string dbName, out string user, out string pass);
+            txtServerStatus.Text = string.Format("{0}:{1} ({2})", host, port, dbName);
+            txtCfgHost.Text = host;
+            txtCfgPort.Text = port;
+            txtCfgDbName.Text = dbName;
+            txtCfgUser.Text = user;
+            txtCfgPass.Password = pass;
         }
 
         private void LoadRememberedUser()
@@ -45,8 +63,62 @@ namespace QuizzApp.GUI
             txtPassword.Password = "123456";
         }
 
+        private void BtnOpenServerConfig_Click(object sender, RoutedEventArgs e)
+        {
+            OpenServerConfigPanel();
+        }
+
+        private void OpenServerConfigPanel()
+        {
+            UpdateServerStatusBadge();
+            txtServerConfigMsg.Visibility = Visibility.Collapsed;
+            panelAuthForm.Visibility = Visibility.Collapsed;
+            panelServerConfig.Visibility = Visibility.Visible;
+        }
+
+        private void BtnCloseServerConfig_Click(object sender, RoutedEventArgs e)
+        {
+            panelServerConfig.Visibility = Visibility.Collapsed;
+            panelAuthForm.Visibility = Visibility.Visible;
+        }
+
+        private void BtnSaveServerConfig_Click(object sender, RoutedEventArgs e)
+        {
+            string host = txtCfgHost.Text.Trim();
+            string port = txtCfgPort.Text.Trim();
+            string dbName = txtCfgDbName.Text.Trim();
+            string user = txtCfgUser.Text.Trim();
+            string pass = txtCfgPass.Password;
+
+            if (QuizService.ConfigureServerConnection(host, port, dbName, user, pass, out string errorMsg))
+            {
+                UpdateServerStatusBadge();
+                ShowServerConfigMessage("Kết nối máy chủ MySQL thành công! Đã lưu cấu hình và đồng bộ dữ liệu.", isError: false);
+                MessageBox.Show(
+                    string.Format("Đã kết nối thành công tới máy chủ MySQL:\n{0}:{1} (CSDL: {2})", host, port, dbName),
+                    "Kết nối LAN thành công",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                panelServerConfig.Visibility = Visibility.Collapsed;
+                panelAuthForm.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                ShowServerConfigMessage("Không thể kết nối: " + errorMsg, isError: true);
+            }
+        }
+
+        private void ShowServerConfigMessage(string msg, bool isError)
+        {
+            txtServerConfigMsg.Text = msg;
+            txtServerConfigMsg.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isError ? "#DC2626" : "#15803D"));
+            txtServerConfigMsg.Visibility = Visibility.Visible;
+        }
+
         private void BtnFillAdmin_Click(object sender, RoutedEventArgs e)
         {
+            panelServerConfig.Visibility = Visibility.Collapsed;
+            panelAuthForm.Visibility = Visibility.Visible;
             if (_isRegisterMode) ToggleMode();
             txtUsername.Text = "admin";
             txtPassword.Password = "123456";
@@ -55,6 +127,8 @@ namespace QuizzApp.GUI
 
         private void BtnFillStudent_Click(object sender, RoutedEventArgs e)
         {
+            panelServerConfig.Visibility = Visibility.Collapsed;
+            panelAuthForm.Visibility = Visibility.Visible;
             if (_isRegisterMode) ToggleMode();
             txtUsername.Text = "hocvien";
             txtPassword.Password = "123456";
@@ -111,67 +185,74 @@ namespace QuizzApp.GUI
             if (DateTime.UtcNow < _lockedUntilUtc)
             {
                 int waitSecs = (int)Math.Ceiling((_lockedUntilUtc - DateTime.UtcNow).TotalSeconds);
-                ShowError($"Tài khoản tạm khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau {waitSecs} giây.");
+                ShowError(string.Format("Tài khoản tạm khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau {0} giây.", waitSecs));
                 return;
             }
 
             string username = txtUsername.Text.Trim();
             string password = txtPassword.Password;
 
-            if (_isRegisterMode)
+            try
             {
-                string fullName = txtFullName.Text.Trim();
-                if (!QuizService.RegisterUser(username, password, fullName, out string errorMsg))
+                if (_isRegisterMode)
                 {
-                    ShowError(errorMsg);
+                    string fullName = txtFullName.Text.Trim();
+                    if (!QuizService.RegisterUser(username, password, fullName, out string errorMsg))
+                    {
+                        ShowError(errorMsg);
+                        return;
+                    }
+
+                    MessageBox.Show("Đăng ký tài khoản học sinh thành công! Hệ thống sẽ tự động đăng nhập.",
+                        "Thành công", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+
+                var user = QuizService.AuthenticateUser(username, password);
+                if (user == null)
+                {
+                    _failedAttempts++;
+                    if (_failedAttempts >= 5)
+                    {
+                        _lockedUntilUtc = DateTime.UtcNow.AddSeconds(30);
+                        _failedAttempts = 0;
+                        ShowError("Bạn đã nhập sai 5 lần liên tiếp! Tạm khóa đăng nhập trong 30 giây.");
+                    }
+                    else
+                    {
+                        ShowError(string.Format("Tên đăng nhập hoặc mật khẩu không chính xác! (Lần thử {0}/5)", _failedAttempts));
+                    }
                     return;
                 }
 
-                MessageBox.Show("Đăng ký tài khoản học sinh thành công! Hệ thống sẽ tự động đăng nhập.",
-                    "Thành công", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-
-            var user = QuizService.AuthenticateUser(username, password);
-            if (user == null)
-            {
-                _failedAttempts++;
-                if (_failedAttempts >= 5)
+                _failedAttempts = 0;
+                try
                 {
-                    _lockedUntilUtc = DateTime.UtcNow.AddSeconds(30);
-                    _failedAttempts = 0;
-                    ShowError("Bạn đã nhập sai 5 lần liên tiếp! Tạm khóa đăng nhập trong 30 giây.");
+                    if (chkRememberMe.IsChecked == true)
+                        File.WriteAllText(RememberFile, username);
+                    else if (File.Exists(RememberFile))
+                        File.Delete(RememberFile);
+                }
+                catch { }
+
+                SessionManager.CurrentUser = user;
+
+                if (user.IsAdmin)
+                {
+                    var adminWin = new AdminWindow();
+                    adminWin.Show();
                 }
                 else
                 {
-                    ShowError($"Tên đăng nhập hoặc mật khẩu không chính xác! (Lần thử {_failedAttempts}/5)");
+                    var mainWin = new MainWindow();
+                    mainWin.Show();
                 }
-                return;
-            }
 
-            _failedAttempts = 0;
-            try
+                Close();
+            }
+            catch (Exception ex)
             {
-                if (chkRememberMe.IsChecked == true)
-                    File.WriteAllText(RememberFile, username);
-                else if (File.Exists(RememberFile))
-                    File.Delete(RememberFile);
+                ShowError("Lỗi kết nối máy chủ CSDL: " + ex.Message);
             }
-            catch { }
-
-            SessionManager.CurrentUser = user;
-
-            if (user.IsAdmin)
-            {
-                var adminWin = new AdminWindow();
-                adminWin.Show();
-            }
-            else
-            {
-                var mainWin = new MainWindow();
-                mainWin.Show();
-            }
-
-            Close();
         }
 
         private void ShowError(string msg)

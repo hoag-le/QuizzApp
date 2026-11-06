@@ -64,10 +64,30 @@ namespace QuizzApp.BLL
         public List<LocalAttemptAnswerMeta> AttemptAnswers { get; set; } = new List<LocalAttemptAnswerMeta>();
     }
 
+    public class DbMetaItemRow
+    {
+        public string Category { get; set; }
+        public string ItemKey { get; set; }
+        public string XmlData { get; set; }
+    }
+
     public static class QuizService
     {
-        private static readonly string MetaFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "QuizzApp_Meta.xml");
+        private static readonly object MetaLock = new object();
+        private static readonly string MetaFilePath = Path.Combine(GetBaseDirectory(), "QuizzApp_Meta.xml");
         private static LocalMetadataStore _metaCache;
+        private static DateTime _lastMetaFetchUtc = DateTime.MinValue;
+        private static bool _metaTableEnsured = false;
+
+        private static string GetBaseDirectory()
+        {
+            string asmDir = Path.GetDirectoryName(typeof(QuizService).Assembly.Location);
+            if (!string.IsNullOrEmpty(asmDir) && File.Exists(Path.Combine(asmDir, "QuizzApp.BLL.exe")))
+            {
+                return asmDir;
+            }
+            return AppDomain.CurrentDomain.BaseDirectory;
+        }
 
         static QuizService()
         {
@@ -76,7 +96,7 @@ namespace QuizzApp.BLL
                 try
                 {
                     var asmName = new System.Reflection.AssemblyName(args.Name).Name;
-                    string candidate = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, asmName + ".dll");
+                    string candidate = Path.Combine(GetBaseDirectory(), asmName + ".dll");
                     if (File.Exists(candidate))
                     {
                         return System.Reflection.Assembly.LoadFrom(candidate);
@@ -89,43 +109,347 @@ namespace QuizzApp.BLL
             };
         }
 
-        private static LocalMetadataStore GetMeta()
+        // ==================== SERVER CONNECTION CONFIG (LAN / MULTI-USER) ====================
+
+        public static void GetServerConfig(out string host, out string port, out string dbName, out string user, out string pass)
         {
-            if (_metaCache != null) return _metaCache;
+            QuizzDbContext.LoadConfiguration();
+            host = QuizzDbContext.ServerHost;
+            port = QuizzDbContext.Port;
+            dbName = QuizzDbContext.DbName;
+            user = QuizzDbContext.DbUser;
+            pass = QuizzDbContext.DbPass;
+        }
+
+        public static string GetServerSummaryText()
+        {
+            return string.Format("{0}:{1} ({2})", QuizzDbContext.ServerHost, QuizzDbContext.Port, QuizzDbContext.DbName);
+        }
+
+        public static bool ConfigureServerConnection(string host, string port, string dbName, string user, string pass, out string errorMessage)
+        {
+            if (!QuizzDbContext.TestConnection(host, port, dbName, user, pass, out errorMessage))
+            {
+                return false;
+            }
+
+            QuizzDbContext.SaveConfiguration(host, port, dbName, user, pass);
+            lock (MetaLock)
+            {
+                _metaTableEnsured = false;
+                _metaCache = null;
+                _lastMetaFetchUtc = DateTime.MinValue;
+            }
+
             try
             {
-                if (File.Exists(MetaFilePath))
+                InitializeDatabase();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errorMessage = ex.Message;
+                return false;
+            }
+        }
+
+        // ==================== SHARED MYSQL METADATA ENGINE ====================
+
+        private static string SerializeItemToXml<T>(T item)
+        {
+            var serializer = new XmlSerializer(typeof(T));
+            using (var sw = new StringWriter())
+            {
+                serializer.Serialize(sw, item);
+                return sw.ToString();
+            }
+        }
+
+        private static T DeserializeItemFromXml<T>(string xml) where T : class
+        {
+            if (string.IsNullOrWhiteSpace(xml)) return null;
+            try
+            {
+                var serializer = new XmlSerializer(typeof(T));
+                using (var sr = new StringReader(xml))
                 {
-                    var serializer = new XmlSerializer(typeof(LocalMetadataStore));
-                    using (var fs = new FileStream(MetaFilePath, FileMode.Open, FileAccess.Read))
+                    return serializer.Deserialize(sr) as T;
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void EnsureMetaTableExists(QuizzDbContext db)
+        {
+            if (_metaTableEnsured) return;
+            db.Database.ExecuteSqlCommand(
+                "CREATE TABLE IF NOT EXISTS `QuizzAppMetaItems` (" +
+                "`Category` VARCHAR(32) NOT NULL, " +
+                "`ItemKey` VARCHAR(64) NOT NULL, " +
+                "`XmlData` LONGTEXT NOT NULL, " +
+                "`UpdatedAt` DATETIME NOT NULL, " +
+                "PRIMARY KEY (`Category`, `ItemKey`)" +
+                ") CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+            );
+            _metaTableEnsured = true;
+        }
+
+        private static void UpsertMetaRow<T>(string category, string itemKey, T item, QuizzDbContext existingDb = null)
+        {
+            try
+            {
+                string xml = SerializeItemToXml(item);
+                const string sql =
+                    "INSERT INTO `QuizzAppMetaItems` (`Category`, `ItemKey`, `XmlData`, `UpdatedAt`) " +
+                    "VALUES (@p0, @p1, @p2, NOW()) " +
+                    "ON DUPLICATE KEY UPDATE `XmlData` = VALUES(`XmlData`), `UpdatedAt` = NOW();";
+
+                if (existingDb != null)
+                {
+                    EnsureMetaTableExists(existingDb);
+                    existingDb.Database.ExecuteSqlCommand(sql, category, itemKey, xml);
+                }
+                else
+                {
+                    using (var db = new QuizzDbContext())
                     {
-                        _metaCache = (LocalMetadataStore)serializer.Deserialize(fs);
-                        if (_metaCache != null) return _metaCache;
+                        EnsureMetaTableExists(db);
+                        db.Database.ExecuteSqlCommand(sql, category, itemKey, xml);
                     }
                 }
             }
             catch
             {
-                // Ignore corrupted metadata file and recreate
+                // Ignore transient metadata sync errors
             }
-            _metaCache = new LocalMetadataStore();
-            return _metaCache;
         }
 
-        private static void SaveMeta()
+        private static void DeleteMetaRow(string category, string itemKey, QuizzDbContext existingDb = null)
         {
             try
             {
-                var store = GetMeta();
+                const string sql = "DELETE FROM `QuizzAppMetaItems` WHERE `Category` = @p0 AND `ItemKey` = @p1;";
+                if (existingDb != null)
+                {
+                    EnsureMetaTableExists(existingDb);
+                    existingDb.Database.ExecuteSqlCommand(sql, category, itemKey);
+                }
+                else
+                {
+                    using (var db = new QuizzDbContext())
+                    {
+                        EnsureMetaTableExists(db);
+                        db.Database.ExecuteSqlCommand(sql, category, itemKey);
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void DeleteMetaByKeyPrefix(string category, string prefix, QuizzDbContext existingDb = null)
+        {
+            try
+            {
+                const string sql = "DELETE FROM `QuizzAppMetaItems` WHERE `Category` = @p0 AND `ItemKey` LIKE @p1;";
+                string pattern = prefix + "%";
+                if (existingDb != null)
+                {
+                    EnsureMetaTableExists(existingDb);
+                    existingDb.Database.ExecuteSqlCommand(sql, category, pattern);
+                }
+                else
+                {
+                    using (var db = new QuizzDbContext())
+                    {
+                        EnsureMetaTableExists(db);
+                        db.Database.ExecuteSqlCommand(sql, category, pattern);
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void PushStoreToMySql(QuizzDbContext db, LocalMetadataStore store)
+        {
+            if (store == null) return;
+            EnsureMetaTableExists(db);
+
+            foreach (var c in store.Chapters)
+            {
+                UpsertMetaRow("Chapter", c.Id.ToString(), c, db);
+            }
+            foreach (var e in store.Exams)
+            {
+                UpsertMetaRow("Exam", e.ExamId.ToString(), e, db);
+            }
+            foreach (var q in store.Questions)
+            {
+                UpsertMetaRow("Question", q.QuestionId.ToString(), q, db);
+            }
+            foreach (var a in store.Attempts)
+            {
+                UpsertMetaRow("Attempt", a.AttemptId.ToString(), a, db);
+            }
+            foreach (var ans in store.AttemptAnswers)
+            {
+                UpsertMetaRow("Answer", string.Format("{0}_{1}", ans.AttemptId, ans.QuestionId), ans, db);
+            }
+        }
+
+        private static LocalMetadataStore LoadMetaFromLocalFile()
+        {
+            try
+            {
+                if (File.Exists(MetaFilePath))
+                {
+                    var serializer = new XmlSerializer(typeof(LocalMetadataStore));
+                    using (var fs = new FileStream(MetaFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    {
+                        var store = (LocalMetadataStore)serializer.Deserialize(fs);
+                        if (store != null) return store;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return new LocalMetadataStore();
+        }
+
+        private static void SaveMetaToLocalFile(LocalMetadataStore store)
+        {
+            try
+            {
+                if (store == null) return;
                 var serializer = new XmlSerializer(typeof(LocalMetadataStore));
-                using (var fs = new FileStream(MetaFilePath, FileMode.Create, FileAccess.Write))
+                using (var fs = new FileStream(MetaFilePath, FileMode.Create, FileAccess.Write, FileShare.Read))
                 {
                     serializer.Serialize(fs, store);
                 }
             }
             catch
             {
-                // Ignore IO errors on metadata save
+            }
+        }
+
+        private static LocalMetadataStore GetMeta(bool forceRefresh = false)
+        {
+            lock (MetaLock)
+            {
+                if (!forceRefresh && _metaCache != null && (DateTime.UtcNow - _lastMetaFetchUtc).TotalMilliseconds < 800)
+                {
+                    return _metaCache;
+                }
+
+                try
+                {
+                    using (var db = new QuizzDbContext())
+                    {
+                        EnsureMetaTableExists(db);
+                        var rows = db.Database.SqlQuery<DbMetaItemRow>(
+                            "SELECT `Category`, `ItemKey`, `XmlData` FROM `QuizzAppMetaItems`;"
+                        ).ToList();
+
+                        if (rows.Count == 0 && File.Exists(MetaFilePath))
+                        {
+                            // Tự động đồng bộ dữ liệu từ file QuizzApp_Meta.xml cục bộ lên MySQL lần đầu
+                            var migratedStore = LoadMetaFromLocalFile();
+                            PushStoreToMySql(db, migratedStore);
+                            _metaCache = migratedStore;
+                            _lastMetaFetchUtc = DateTime.UtcNow;
+                            return _metaCache;
+                        }
+
+                        var store = new LocalMetadataStore();
+                        foreach (var row in rows)
+                        {
+                            if (row.Category == "Chapter")
+                            {
+                                var item = DeserializeItemFromXml<LocalChapterItem>(row.XmlData);
+                                if (item != null) store.Chapters.Add(item);
+                            }
+                            else if (row.Category == "Exam")
+                            {
+                                var item = DeserializeItemFromXml<LocalExamMeta>(row.XmlData);
+                                if (item != null) store.Exams.Add(item);
+                            }
+                            else if (row.Category == "Question")
+                            {
+                                var item = DeserializeItemFromXml<LocalQuestionMeta>(row.XmlData);
+                                if (item != null) store.Questions.Add(item);
+                            }
+                            else if (row.Category == "Attempt")
+                            {
+                                var item = DeserializeItemFromXml<LocalAttemptMeta>(row.XmlData);
+                                if (item != null) store.Attempts.Add(item);
+                            }
+                            else if (row.Category == "Answer")
+                            {
+                                var item = DeserializeItemFromXml<LocalAttemptAnswerMeta>(row.XmlData);
+                                if (item != null) store.AttemptAnswers.Add(item);
+                            }
+                        }
+
+                        if ((store.Exams.Count == 0 || store.Questions.Count == 0) && File.Exists(MetaFilePath))
+                        {
+                            var localStore = LoadMetaFromLocalFile();
+                            foreach (var e in localStore.Exams)
+                            {
+                                if (!store.Exams.Any(x => x.ExamId == e.ExamId))
+                                {
+                                    store.Exams.Add(e);
+                                    UpsertMetaRow("Exam", e.ExamId.ToString(), e, db);
+                                }
+                            }
+                            foreach (var q in localStore.Questions)
+                            {
+                                if (!store.Questions.Any(x => x.QuestionId == q.QuestionId))
+                                {
+                                    store.Questions.Add(q);
+                                    UpsertMetaRow("Question", q.QuestionId.ToString(), q, db);
+                                }
+                            }
+                            foreach (var c in localStore.Chapters)
+                            {
+                                if (!store.Chapters.Any(x => x.Id == c.Id))
+                                {
+                                    store.Chapters.Add(c);
+                                    UpsertMetaRow("Chapter", c.Id.ToString(), c, db);
+                                }
+                            }
+                        }
+
+                        _metaCache = store;
+                        _lastMetaFetchUtc = DateTime.UtcNow;
+                        return _metaCache;
+                    }
+                }
+                catch
+                {
+                    if (_metaCache == null)
+                    {
+                        _metaCache = LoadMetaFromLocalFile();
+                    }
+                    return _metaCache;
+                }
+            }
+        }
+
+        private static void SaveMeta()
+        {
+            lock (MetaLock)
+            {
+                if (_metaCache != null)
+                {
+                    SaveMetaToLocalFile(_metaCache);
+                }
             }
         }
 
@@ -134,6 +458,7 @@ namespace QuizzApp.BLL
             using (var db = new QuizzDbContext())
             {
                 db.Database.Initialize(false);
+                EnsureMetaTableExists(db);
 
                 // Đảm bảo có tài khoản admin và học viên mẫu
                 if (!db.Users.Any(u => u.Username.ToLower() == "admin"))
@@ -171,6 +496,9 @@ namespace QuizzApp.BLL
 
                 db.SaveChanges();
 
+                // Nạp và đồng bộ Metadata từ MySQL (hoặc migrate từ file XML nếu lần đầu)
+                GetMeta(true);
+
                 // Nếu chưa có đề thi nào trong DB, tự động nạp bộ dữ liệu mẫu
                 if (!db.Exams.Any())
                 {
@@ -192,25 +520,33 @@ namespace QuizzApp.BLL
                 if (!meta.Chapters.Any(c => c.SubjectId == s.Id))
                 {
                     int nextId = meta.Chapters.Count > 0 ? meta.Chapters.Max(c => c.Id) + 1 : 1;
+                    var addedChapters = new List<LocalChapterItem>();
+
                     if (s.SubjectCode == "CSHARP")
                     {
-                        meta.Chapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 1: Cú pháp & Kiểu dữ liệu" });
-                        meta.Chapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 2: Lập trình Hướng đối tượng (OOP)" });
-                        meta.Chapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 3: LINQ & Quản lý bộ nhớ" });
+                        addedChapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 1: Cú pháp & Kiểu dữ liệu" });
+                        addedChapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 2: Lập trình Hướng đối tượng (OOP)" });
+                        addedChapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 3: LINQ & Quản lý bộ nhớ" });
                     }
                     else if (s.SubjectCode == "NET101")
                     {
-                        meta.Chapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 1: XAML & Bố cục Layout" });
-                        meta.Chapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 2: Data Binding & MVVM" });
+                        addedChapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 1: XAML & Bố cục Layout" });
+                        addedChapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 2: Data Binding & MVVM" });
                     }
                     else if (s.SubjectCode == "SQL101")
                     {
-                        meta.Chapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 1: Truy vấn SQL cơ bản" });
-                        meta.Chapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 2: ADO.NET & Entity Framework" });
+                        addedChapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 1: Truy vấn SQL cơ bản" });
+                        addedChapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 2: ADO.NET & Entity Framework" });
                     }
                     else
                     {
-                        meta.Chapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 1: Kiến thức chung" });
+                        addedChapters.Add(new LocalChapterItem { Id = nextId++, SubjectId = s.Id, Name = "Chương 1: Kiến thức chung" });
+                    }
+
+                    foreach (var ch in addedChapters)
+                    {
+                        meta.Chapters.Add(ch);
+                        UpsertMetaRow("Chapter", ch.Id.ToString(), ch, db);
                     }
                     changed = true;
                 }
@@ -224,8 +560,6 @@ namespace QuizzApp.BLL
 
         private static void SeedSampleExamsAndQuestions(QuizzDbContext db)
         {
-            var meta = GetMeta();
-
             // 1. Môn Lập trình C#
             var subCSharp = db.Subjects.FirstOrDefault(s => s.SubjectCode == "CSHARP");
             if (subCSharp == null)
@@ -267,7 +601,7 @@ namespace QuizzApp.BLL
             db.Exams.Add(exam1);
             db.SaveChanges();
 
-            SetExamMeta(exam1.Id, "C#", "Kiến thức lập trình C# cơ bản, kiểu dữ liệu, vòng lặp và hướng đối tượng.", true, false, "Real", true);
+            SetExamMeta(exam1.Id, "C#", "Kiến thức lập trình C# cơ bản, kiểu dữ liệu, vòng lặp và hướng đối tượng.", true, false, "Real", true, db);
 
             AddSeedQuestion(db, exam1.Id, subCSharp.Id, 1, "Từ khóa nào dùng để khai báo một lớp (class) trong C#?",
                 "struct", "class", "interface", "object", "B", 1, "Từ khóa 'class' được sử dụng để khai báo một lớp trong C#.");
@@ -302,7 +636,7 @@ namespace QuizzApp.BLL
             db.Exams.Add(exam2);
             db.SaveChanges();
 
-            SetExamMeta(exam2.Id, "NET", "Kiểm tra kiến thức nền tảng .NET, XAML, Data Binding và điều khiển giao diện WPF.", false, false, "Real", false);
+            SetExamMeta(exam2.Id, "NET", "Kiểm tra kiến thức nền tảng .NET, XAML, Data Binding và điều khiển giao diện WPF.", false, false, "Real", false, db);
 
             AddSeedQuestion(db, exam2.Id, subNet.Id, 1, "XAML trong WPF là viết tắt của từ gì?",
                 "eXtensible Application Markup Language", "XML Application Modeling Language", "eXtreme Access Markup Language", "X-Platform Application Markup Language", "A", 1, "XAML là viết tắt của eXtensible Application Markup Language, dùng để thiết kế giao diện trong WPF.");
@@ -327,7 +661,7 @@ namespace QuizzApp.BLL
             db.Exams.Add(exam3);
             db.SaveChanges();
 
-            SetExamMeta(exam3.Id, "SQL", "Kiểm tra kiến thức truy vấn SQL, thiết kế bảng, khóa chính, khóa ngoại và Entity Framework.", true, true, "Practice", false);
+            SetExamMeta(exam3.Id, "SQL", "Kiểm tra kiến thức truy vấn SQL, thiết kế bảng, khóa chính, khóa ngoại và Entity Framework.", true, true, "Practice", false, db);
 
             AddSeedQuestion(db, exam3.Id, subSql.Id, 1, "Câu lệnh SQL nào được sử dụng để trích xuất dữ liệu từ một bảng?",
                 "GET", "OPEN", "SELECT", "EXTRACT", "C", 1, "Câu lệnh SELECT được dùng để truy vấn dữ liệu từ một hoặc nhiều bảng.");
@@ -370,10 +704,10 @@ namespace QuizzApp.BLL
             db.SaveChanges();
 
             var chap = GetMeta().Chapters.FirstOrDefault(ch => ch.SubjectId == subjectId);
-            SetQuestionMeta(q.Id, chap != null ? chap.Id : 1, explanation);
+            SetQuestionMeta(q.Id, chap != null ? chap.Id : 1, explanation, db);
         }
 
-        private static void SetExamMeta(int examId, string code, string desc, bool shuffleQ, bool shuffleA, string mode, bool isSaved)
+        private static void SetExamMeta(int examId, string code, string desc, bool shuffleQ, bool shuffleA, string mode, bool isSaved, QuizzDbContext existingDb = null)
         {
             var meta = GetMeta();
             var existing = meta.Exams.FirstOrDefault(x => x.ExamId == examId);
@@ -388,9 +722,11 @@ namespace QuizzApp.BLL
             existing.ShuffleAnswers = shuffleA;
             existing.Mode = mode ?? "Real";
             existing.IsSaved = isSaved;
+
+            UpsertMetaRow("Exam", examId.ToString(), existing, existingDb);
         }
 
-        private static void SetQuestionMeta(int questionId, int chapterId, string explanation)
+        private static void SetQuestionMeta(int questionId, int chapterId, string explanation, QuizzDbContext existingDb = null)
         {
             var meta = GetMeta();
             var existing = meta.Questions.FirstOrDefault(x => x.QuestionId == questionId);
@@ -401,6 +737,8 @@ namespace QuizzApp.BLL
             }
             existing.ChapterId = chapterId;
             existing.Explanation = explanation ?? "";
+
+            UpsertMetaRow("Question", questionId.ToString(), existing, existingDb);
         }
 
         private static string MapRoleToEntityRole(string uiRole)
@@ -582,6 +920,8 @@ namespace QuizzApp.BLL
                 foreach (var att in attempts)
                 {
                     db.AttemptDetails.RemoveRange(att.AttemptDetails);
+                    DeleteMetaRow("Attempt", att.Id.ToString(), db);
+                    DeleteMetaByKeyPrefix("Answer", att.Id.ToString() + "_", db);
                 }
                 db.ExamAttempts.RemoveRange(attempts);
 
@@ -645,14 +985,16 @@ namespace QuizzApp.BLL
                 db.Subjects.Add(subj);
                 db.SaveChanges();
 
-                var meta = GetMeta();
+                var meta = GetMeta(true);
                 int nextChapId = meta.Chapters.Count > 0 ? meta.Chapters.Max(c => c.Id) + 1 : 1;
-                meta.Chapters.Add(new LocalChapterItem
+                var newChap = new LocalChapterItem
                 {
                     Id = nextChapId,
                     SubjectId = subj.Id,
                     Name = "Chương 1: Kiến thức chung"
-                });
+                };
+                meta.Chapters.Add(newChap);
+                UpsertMetaRow("Chapter", newChap.Id.ToString(), newChap, db);
                 SaveMeta();
 
                 return subj.Id;
@@ -701,6 +1043,11 @@ namespace QuizzApp.BLL
                 db.SaveChanges();
 
                 var meta = GetMeta();
+                var chapsToDelete = meta.Chapters.Where(c => c.SubjectId == id).Select(c => c.Id).ToList();
+                foreach (int cid in chapsToDelete)
+                {
+                    DeleteMetaRow("Chapter", cid.ToString(), db);
+                }
                 meta.Chapters.RemoveAll(c => c.SubjectId == id);
                 SaveMeta();
             }
@@ -732,14 +1079,16 @@ namespace QuizzApp.BLL
 
         public static void AddChapter(int subjectId, string chapterName)
         {
-            var meta = GetMeta();
+            var meta = GetMeta(true);
             int nextId = meta.Chapters.Count > 0 ? meta.Chapters.Max(c => c.Id) + 1 : 1;
-            meta.Chapters.Add(new LocalChapterItem
+            var newChap = new LocalChapterItem
             {
                 Id = nextId,
                 SubjectId = subjectId,
                 Name = (chapterName ?? "").Trim()
-            });
+            };
+            meta.Chapters.Add(newChap);
+            UpsertMetaRow("Chapter", newChap.Id.ToString(), newChap);
             SaveMeta();
         }
 
@@ -747,6 +1096,7 @@ namespace QuizzApp.BLL
         {
             var meta = GetMeta();
             meta.Chapters.RemoveAll(c => c.Id == chapterId);
+            DeleteMetaRow("Chapter", chapterId.ToString());
             SaveMeta();
         }
 
@@ -836,7 +1186,7 @@ namespace QuizzApp.BLL
                 db.Exams.Add(newExam);
                 db.SaveChanges();
 
-                SetExamMeta(newExam.Id, exam.Code ?? "QUIZ", exam.Description, exam.ShuffleQuestions, exam.ShuffleAnswers, exam.Mode, false);
+                SetExamMeta(newExam.Id, exam.Code ?? "QUIZ", exam.Description, exam.ShuffleQuestions, exam.ShuffleAnswers, exam.Mode, false, db);
                 SaveMeta();
 
                 var rng = new Random();
@@ -881,7 +1231,7 @@ namespace QuizzApp.BLL
                 db.Exams.Add(entity);
                 db.SaveChanges();
 
-                SetExamMeta(entity.Id, exam.Code ?? "QUIZ", exam.Description, exam.ShuffleQuestions, exam.ShuffleAnswers, exam.Mode ?? "Real", exam.IsSaved);
+                SetExamMeta(entity.Id, exam.Code ?? "QUIZ", exam.Description, exam.ShuffleQuestions, exam.ShuffleAnswers, exam.Mode ?? "Real", exam.IsSaved, db);
                 SaveMeta();
                 return entity.Id;
             }
@@ -909,7 +1259,7 @@ namespace QuizzApp.BLL
                     db.SaveChanges();
                 }
 
-                SetExamMeta(exam.Id, exam.Code ?? "QUIZ", exam.Description, exam.ShuffleQuestions, exam.ShuffleAnswers, exam.Mode ?? "Real", exam.IsSaved);
+                SetExamMeta(exam.Id, exam.Code ?? "QUIZ", exam.Description, exam.ShuffleQuestions, exam.ShuffleAnswers, exam.Mode ?? "Real", exam.IsSaved, db);
                 SaveMeta();
             }
         }
@@ -929,6 +1279,8 @@ namespace QuizzApp.BLL
             foreach (var att in attempts)
             {
                 db.AttemptDetails.RemoveRange(att.AttemptDetails);
+                DeleteMetaRow("Attempt", att.Id.ToString(), db);
+                DeleteMetaByKeyPrefix("Answer", att.Id.ToString() + "_", db);
             }
             db.ExamAttempts.RemoveRange(attempts);
 
@@ -943,6 +1295,7 @@ namespace QuizzApp.BLL
 
             var meta = GetMeta();
             meta.Exams.RemoveAll(x => x.ExamId == examId);
+            DeleteMetaRow("Exam", examId.ToString(), db);
             SaveMeta();
         }
 
@@ -956,6 +1309,7 @@ namespace QuizzApp.BLL
                 meta.Exams.Add(em);
             }
             em.IsSaved = isSaved;
+            UpsertMetaRow("Exam", examId.ToString(), em);
             SaveMeta();
         }
 
@@ -1065,7 +1419,7 @@ namespace QuizzApp.BLL
                     db.SaveChanges();
                 }
 
-                SetQuestionMeta(entity.Id, q.ChapterId, q.Explanation);
+                SetQuestionMeta(entity.Id, q.ChapterId, q.Explanation, db);
                 SaveMeta();
             }
         }
@@ -1107,7 +1461,7 @@ namespace QuizzApp.BLL
                     db.SaveChanges();
                 }
 
-                SetQuestionMeta(q.Id, q.ChapterId, q.Explanation);
+                SetQuestionMeta(q.Id, q.ChapterId, q.Explanation, db);
                 SaveMeta();
             }
         }
@@ -1140,6 +1494,7 @@ namespace QuizzApp.BLL
 
             var meta = GetMeta();
             meta.Questions.RemoveAll(x => x.QuestionId == questionId);
+            DeleteMetaRow("Question", questionId.ToString(), db);
             SaveMeta();
         }
 
@@ -1290,13 +1645,17 @@ namespace QuizzApp.BLL
                 db.ExamAttempts.Add(attemptEntity);
                 db.SaveChanges();
 
-                var meta = GetMeta();
-                meta.Attempts.Add(new LocalAttemptMeta
+                var attemptMeta = new LocalAttemptMeta
                 {
                     AttemptId = attemptEntity.Id,
                     RandomSeed = seed,
                     Status = "InProgress"
-                });
+                };
+
+                var meta = GetMeta();
+                meta.Attempts.RemoveAll(x => x.AttemptId == attemptEntity.Id);
+                meta.Attempts.Add(attemptMeta);
+                UpsertMetaRow("Attempt", attemptEntity.Id.ToString(), attemptMeta, db);
                 SaveMeta();
 
                 return new AttemptRecord
@@ -1306,7 +1665,7 @@ namespace QuizzApp.BLL
                     ExamTitle = exam.Title,
                     UserId = validUserId,
                     StudentName = studentName,
-                    StartedAtUtc = nowLocal.ToUniversalTime(),
+                    StartedAtUtc = DateTime.SpecifyKind(nowLocal, DateTimeKind.Local).ToUniversalTime(),
                     Status = "InProgress",
                     RandomSeed = seed
                 };
@@ -1328,7 +1687,7 @@ namespace QuizzApp.BLL
 
                 if (active != null && active.Exam != null)
                 {
-                    DateTime startedUtc = active.StartTime.ToUniversalTime();
+                    DateTime startedUtc = DateTime.SpecifyKind(active.StartTime, DateTimeKind.Local).ToUniversalTime();
                     TimeSpan remaining = startedUtc.AddMinutes(active.Exam.DurationMinutes) - DateTime.UtcNow;
                     if (remaining.TotalSeconds > 5)
                     {
@@ -1354,6 +1713,14 @@ namespace QuizzApp.BLL
         public static void SaveAttemptAnswerProgress(int attemptId, int questionId, string selectedOptions, bool isFlagged)
         {
             if (attemptId <= 0) return;
+
+            var ansMeta = new LocalAttemptAnswerMeta
+            {
+                AttemptId = attemptId,
+                QuestionId = questionId,
+                SelectedOptions = selectedOptions ?? "",
+                IsFlagged = isFlagged
+            };
 
             using (var db = new QuizzDbContext())
             {
@@ -1390,18 +1757,27 @@ namespace QuizzApp.BLL
                     detail.SelectedOptionId = selectedOptionId;
                 }
                 db.SaveChanges();
+
+                // Lưu nguyên tử từng câu trả lời vào MySQL (không ghi đè bài làm của người dùng khác)
+                UpsertMetaRow("Answer", string.Format("{0}_{1}", attemptId, questionId), ansMeta, db);
             }
 
-            var meta = GetMeta();
-            var ansMeta = meta.AttemptAnswers.FirstOrDefault(x => x.AttemptId == attemptId && x.QuestionId == questionId);
-            if (ansMeta == null)
+            lock (MetaLock)
             {
-                ansMeta = new LocalAttemptAnswerMeta { AttemptId = attemptId, QuestionId = questionId };
-                meta.AttemptAnswers.Add(ansMeta);
+                if (_metaCache != null)
+                {
+                    var existing = _metaCache.AttemptAnswers.FirstOrDefault(x => x.AttemptId == attemptId && x.QuestionId == questionId);
+                    if (existing == null)
+                    {
+                        _metaCache.AttemptAnswers.Add(ansMeta);
+                    }
+                    else
+                    {
+                        existing.SelectedOptions = ansMeta.SelectedOptions;
+                        existing.IsFlagged = ansMeta.IsFlagged;
+                    }
+                }
             }
-            ansMeta.SelectedOptions = selectedOptions ?? "";
-            ansMeta.IsFlagged = isFlagged;
-            SaveMeta();
         }
 
         public static Dictionary<int, AttemptAnswerRecord> GetSavedAnswersForAttempt(int attemptId)
@@ -1416,7 +1792,7 @@ namespace QuizzApp.BLL
                     .Where(ad => ad.ExamAttemptId == attemptId)
                     .ToList();
 
-                var meta = GetMeta();
+                var meta = GetMeta(true);
                 foreach (var d in details)
                 {
                     string selectedKey = "";
@@ -1452,7 +1828,7 @@ namespace QuizzApp.BLL
 
             using (var db = new QuizzDbContext())
             {
-                var details = db.AttemptDetails.Where(ad => ad.ExamAttemptId == attemptId).ToList();
+                var details = db.AttemptDetails.Where(ad => ad.QuestionId > 0 && ad.ExamAttemptId == attemptId).ToList();
                 db.AttemptDetails.RemoveRange(details);
 
                 var att = db.ExamAttempts.FirstOrDefault(a => a.Id == attemptId);
@@ -1461,6 +1837,9 @@ namespace QuizzApp.BLL
                     db.ExamAttempts.Remove(att);
                 }
                 db.SaveChanges();
+
+                DeleteMetaRow("Attempt", attemptId.ToString(), db);
+                DeleteMetaByKeyPrefix("Answer", attemptId.ToString() + "_", db);
             }
 
             var meta = GetMeta();
@@ -1483,13 +1862,16 @@ namespace QuizzApp.BLL
                     att.CorrectAnswersCount = correctCount;
                     db.SaveChanges();
                 }
-            }
 
-            var meta = GetMeta();
-            var am = meta.Attempts.FirstOrDefault(x => x.AttemptId == attemptId);
-            if (am != null)
-            {
+                var meta = GetMeta();
+                var am = meta.Attempts.FirstOrDefault(x => x.AttemptId == attemptId);
+                if (am == null)
+                {
+                    am = new LocalAttemptMeta { AttemptId = attemptId, RandomSeed = attemptId };
+                    meta.Attempts.Add(am);
+                }
                 am.Status = statusStr;
+                UpsertMetaRow("Attempt", attemptId.ToString(), am, db);
                 SaveMeta();
             }
         }
@@ -1620,30 +2002,58 @@ namespace QuizzApp.BLL
             File.WriteAllText(filePath, sb.ToString(), Encoding.UTF8);
         }
 
-        public static void ClearExamHistory()
+        public static void ClearExamHistory(int? userId = null)
         {
             using (var db = new QuizzDbContext())
             {
-                var allDetails = db.AttemptDetails.ToList();
-                db.AttemptDetails.RemoveRange(allDetails);
+                if (userId.HasValue && userId.Value > 0)
+                {
+                    int uid = userId.Value;
+                    var userAttempts = db.ExamAttempts
+                        .Include(a => a.AttemptDetails)
+                        .Where(a => a.UserId == uid && a.SubmitTime != null)
+                        .ToList();
 
-                var allAttempts = db.ExamAttempts.ToList();
-                db.ExamAttempts.RemoveRange(allAttempts);
+                    var meta = GetMeta();
+                    foreach (var att in userAttempts)
+                    {
+                        db.AttemptDetails.RemoveRange(att.AttemptDetails);
+                        DeleteMetaRow("Attempt", att.Id.ToString(), db);
+                        DeleteMetaByKeyPrefix("Answer", att.Id.ToString() + "_", db);
+                        meta.Attempts.RemoveAll(x => x.AttemptId == att.Id);
+                        meta.AttemptAnswers.RemoveAll(x => x.AttemptId == att.Id);
+                    }
+                    db.ExamAttempts.RemoveRange(userAttempts);
+                    db.SaveChanges();
+                    SaveMeta();
+                }
+                else
+                {
+                    var allDetails = db.AttemptDetails.ToList();
+                    db.AttemptDetails.RemoveRange(allDetails);
 
-                db.SaveChanges();
+                    var allAttempts = db.ExamAttempts.ToList();
+                    db.ExamAttempts.RemoveRange(allAttempts);
+
+                    db.SaveChanges();
+
+                    EnsureMetaTableExists(db);
+                    db.Database.ExecuteSqlCommand("DELETE FROM `QuizzAppMetaItems` WHERE `Category` IN ('Attempt', 'Answer');");
+
+                    var meta = GetMeta();
+                    meta.Attempts.Clear();
+                    meta.AttemptAnswers.Clear();
+                    SaveMeta();
+                }
             }
-
-            var meta = GetMeta();
-            meta.Attempts.Clear();
-            meta.AttemptAnswers.Clear();
-            SaveMeta();
         }
 
         // ==================== BACKUP & RESTORE ====================
 
         public static void BackupDatabase(string destinationPath)
         {
-            SaveMeta();
+            var latestMeta = GetMeta(true);
+            SaveMetaToLocalFile(latestMeta);
             if (File.Exists(MetaFilePath))
             {
                 File.Copy(MetaFilePath, destinationPath, true);
@@ -1659,7 +2069,16 @@ namespace QuizzApp.BLL
             if (File.Exists(sourcePath))
             {
                 File.Copy(sourcePath, MetaFilePath, true);
-                _metaCache = null;
+                var restoredStore = LoadMetaFromLocalFile();
+                using (var db = new QuizzDbContext())
+                {
+                    PushStoreToMySql(db, restoredStore);
+                }
+                lock (MetaLock)
+                {
+                    _metaCache = restoredStore;
+                    _lastMetaFetchUtc = DateTime.UtcNow;
+                }
             }
             InitializeDatabase();
         }
