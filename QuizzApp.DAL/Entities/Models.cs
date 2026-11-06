@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -38,11 +38,26 @@ namespace QuizzApp.DAL.Entities
         [Required, StringLength(150)]
         public string SubjectName { get; set; }
 
+        public virtual ICollection<Chapter> Chapters { get; set; } = new List<Chapter>();
         public virtual ICollection<Question> Questions { get; set; } = new List<Question>();
         public virtual ICollection<Exam> Exams { get; set; } = new List<Exam>();
     }
 
-    // 3. Bảng Ngân hàng câu hỏi
+    // 3. Bảng Chương học
+    public class Chapter
+    {
+        [Key]
+        public int Id { get; set; }
+
+        public int SubjectId { get; set; }
+        [ForeignKey("SubjectId")]
+        public virtual Subject Subject { get; set; }
+
+        [Required, StringLength(200)]
+        public string Name { get; set; } = "";
+    }
+
+    // 4. Bảng Ngân hàng câu hỏi
     public class Question
     {
         [Key]
@@ -57,11 +72,15 @@ namespace QuizzApp.DAL.Entities
         [ForeignKey("SubjectId")]
         public virtual Subject Subject { get; set; }
 
+        public int ChapterId { get; set; } = 1;
+
+        public string Explanation { get; set; } = "";
+
         public virtual ICollection<QuestionOption> QuestionOptions { get; set; } = new List<QuestionOption>();
         public virtual ICollection<ExamQuestion> ExamQuestions { get; set; } = new List<ExamQuestion>();
     }
 
-    // 4. Bảng Các phương án lựa chọn (A, B, C, D)
+    // 5. Bảng Các phương án lựa chọn (A, B, C, D)
     public class QuestionOption
     {
         [Key]
@@ -77,28 +96,42 @@ namespace QuizzApp.DAL.Entities
         public bool IsCorrect { get; set; } = false;
     }
 
-    // 5. Bảng Đề thi / Ca thi
+    // 6. Bảng Đề thi / Ca thi
     public class Exam
     {
         [Key]
         public int Id { get; set; }
 
+        [StringLength(50)]
+        public string Code { get; set; } = "QUIZ";
+
         [Required, StringLength(200)]
         public string Title { get; set; }
+
+        public string Description { get; set; } = "";
 
         public int SubjectId { get; set; }
         [ForeignKey("SubjectId")]
         public virtual Subject Subject { get; set; }
 
         public int DurationMinutes { get; set; } = 45;
+        public bool ShuffleQuestions { get; set; } = true;
+        public bool ShuffleAnswers { get; set; } = false;
+
+        [StringLength(20)]
+        public string Mode { get; set; } = "Real"; // "Real" hoặc "Practice"
+
+        public bool IsSaved { get; set; } = false;
         public bool IsActive { get; set; } = true;
+        public DateTime? ExamStartTime { get; set; }
+        public bool IsManuallyOpened { get; set; } = false;
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
         public virtual ICollection<ExamQuestion> ExamQuestions { get; set; } = new List<ExamQuestion>();
         public virtual ICollection<ExamAttempt> ExamAttempts { get; set; } = new List<ExamAttempt>();
     }
 
-    // 6. Bảng Trung gian: Đề thi gồm những câu hỏi nào
+    // 7. Bảng Trung gian: Đề thi gồm những câu hỏi nào
     public class ExamQuestion
     {
         [Key, Column(Order = 0)]
@@ -114,7 +147,7 @@ namespace QuizzApp.DAL.Entities
         public int OrderIndex { get; set; }
     }
 
-    // 7. Bảng Lịch sử làm bài của Thí sinh
+    // 8. Bảng Lịch sử làm bài của Thí sinh
     public class ExamAttempt
     {
         [Key]
@@ -132,11 +165,15 @@ namespace QuizzApp.DAL.Entities
         public DateTime? SubmitTime { get; set; }
         public double TotalScore { get; set; } = 0;
         public int CorrectAnswersCount { get; set; } = 0;
+        public int RandomSeed { get; set; } = 0;
+
+        [StringLength(30)]
+        public string Status { get; set; } = "InProgress"; // "InProgress", "Submitted", "AutoSubmitted"
 
         public virtual ICollection<AttemptDetail> AttemptDetails { get; set; } = new List<AttemptDetail>();
     }
 
-    // 8. Bảng Chi tiết bài làm
+    // 9. Bảng Chi tiết bài làm
     public class AttemptDetail
     {
         [Key]
@@ -151,5 +188,10 @@ namespace QuizzApp.DAL.Entities
         public virtual Question Question { get; set; }
 
         public int? SelectedOptionId { get; set; }
+
+        [StringLength(50)]
+        public string SelectedOptions { get; set; } = "";
+
+        public bool IsFlagged { get; set; } = false;
     }
 }

@@ -4,7 +4,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using Microsoft.Win32;
+using System.Windows.Threading;
 
 using QuizzApp.BLL;
 
@@ -15,11 +15,30 @@ namespace QuizzApp.GUI
         private List<Exam> _allExams = new List<Exam>();
         private bool _onlySavedMode = false;
         private AttemptRecord _pendingAttempt = null;
+        private DispatcherTimer _scheduleRefreshTimer;
 
         public MainWindow()
         {
             InitializeComponent();
             InitializeAppData();
+            StartScheduleRefreshTimer();
+            Closed += (s, e) => _scheduleRefreshTimer?.Stop();
+        }
+
+        private void StartScheduleRefreshTimer()
+        {
+            _scheduleRefreshTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(15)
+            };
+            _scheduleRefreshTimer.Tick += (s, e) =>
+            {
+                if (panelRealExamsView != null && panelRealExamsView.Visibility == Visibility.Visible)
+                {
+                    LoadExams();
+                }
+            };
+            _scheduleRefreshTimer.Start();
         }
 
         private void InitializeAppData()
@@ -30,7 +49,7 @@ namespace QuizzApp.GUI
                 if (SessionManager.CurrentUser != null)
                 {
                     txtSidebarUser.Text = SessionManager.CurrentUser.FullName;
-                    txtSidebarRole.Text = $"{SessionManager.CurrentUser.RoleDisplay} ({SessionManager.CurrentUser.Username})";
+                    txtSidebarRole.Text = SessionManager.CurrentUser.RoleDisplay;
                 }
 
                 LoadSubjectFilters();
@@ -60,10 +79,13 @@ namespace QuizzApp.GUI
         {
             int uid = SessionManager.CurrentUser?.Id ?? 0;
             _pendingAttempt = QuizService.GetActiveAttemptForUser(uid);
-            if (_pendingAttempt != null)
+            bool onExamTabs = (panelRealExamsView != null && panelRealExamsView.Visibility == Visibility.Visible) ||
+                              (panelPracticeExamsView != null && panelPracticeExamsView.Visibility == Visibility.Visible);
+
+            if (_pendingAttempt != null && onExamTabs)
             {
                 bannerResumeAttempt.Visibility = Visibility.Visible;
-                txtResumeAttemptInfo.Text = $"Đề thi: {_pendingAttempt.ExamTitle} (Bắt đầu lúc {_pendingAttempt.StartedAtUtc.ToLocalTime():HH:mm dd/MM/yyyy})";
+                txtResumeAttemptInfo.Text = $"Đề thi: {_pendingAttempt.ExamTitle}";
             }
             else
             {
@@ -89,6 +111,7 @@ namespace QuizzApp.GUI
             };
             quizWin.ShowDialog();
 
+            LoadExams();
             CheckForActiveAttempt();
             UpdateHeaderStatsBadge();
             if (quizWin.ExamCompleted)
@@ -109,12 +132,31 @@ namespace QuizzApp.GUI
         private void LoadExams()
         {
             _allExams = QuizService.GetAllExams();
-            ApplyExamFilter();
+            BindRealExams();
+            ApplyPracticeAndSavedFilter();
         }
 
-        private void ApplyExamFilter()
+        private void BindRealExams()
         {
-            if (itemsExams == null) return;
+            if (itemsRealExams == null) return;
+
+            int uid = SessionManager.CurrentUser?.Id ?? 0;
+            var completedExamIds = QuizService.GetCompletedExamIdsForUser(uid);
+
+            var realExams = _allExams
+                .Where(x => !x.IsPracticeMode && x.IsAvailableForStudent && !completedExamIds.Contains(x.Id))
+                .ToList();
+
+            itemsRealExams.ItemsSource = realExams;
+            if (borderEmptyRealExams != null)
+            {
+                borderEmptyRealExams.Visibility = realExams.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
+        private void ApplyPracticeAndSavedFilter()
+        {
+            if (itemsPracticeExams == null) return;
 
             string keyword = txtSearch?.Text?.Trim().ToLower() ?? "";
             int selectedSubjectId = (cboSubjectFilter?.SelectedItem as Subject)?.Id ?? 0;
@@ -123,7 +165,11 @@ namespace QuizzApp.GUI
 
             if (_onlySavedMode)
             {
-                filtered = filtered.Where(x => x.IsSaved);
+                filtered = filtered.Where(x => x.IsPracticeMode && x.IsSaved);
+            }
+            else
+            {
+                filtered = filtered.Where(x => x.IsPracticeMode);
             }
 
             if (selectedSubjectId > 0)
@@ -140,8 +186,14 @@ namespace QuizzApp.GUI
             }
 
             var resultList = filtered.ToList();
-            itemsExams.ItemsSource = resultList;
-            txtEmptyExams.Visibility = resultList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            itemsPracticeExams.ItemsSource = resultList;
+            if (txtEmptyPracticeExams != null)
+            {
+                txtEmptyPracticeExams.Text = _onlySavedMode
+                    ? "Bạn chưa lưu đề thi nào phù hợp."
+                    : "Không tìm thấy đề luyện tập nào phù hợp.";
+                txtEmptyPracticeExams.Visibility = resultList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
         }
 
         private void UpdateHeaderStatsBadge()
@@ -154,7 +206,7 @@ namespace QuizzApp.GUI
 
         private void SetActiveNavButton(Button activeBtn)
         {
-            Button[] navButtons = { btnNavExams, btnNavHistory, btnNavSaved, btnNavSettings };
+            Button[] navButtons = { btnNavRealExams, btnNavPracticeExams, btnNavSaved, btnNavHistory };
             foreach (var btn in navButtons)
             {
                 if (btn == activeBtn)
@@ -170,18 +222,33 @@ namespace QuizzApp.GUI
             }
         }
 
-        private void BtnNavExams_Click(object sender, RoutedEventArgs e)
+        private void BtnNavRealExams_Click(object sender, RoutedEventArgs e)
         {
             _onlySavedMode = false;
-            SetActiveNavButton(btnNavExams);
+            SetActiveNavButton(btnNavRealExams);
 
-            txtHeaderTitle.Text = "Thư viện đề thi";
-            txtExamSectionHeading.Text = "Danh sách đề thi";
-            bannerWelcome.Visibility = Visibility.Visible;
+            txtHeaderTitle.Text = "Phòng thi chính thức";
 
-            panelExamsView.Visibility = Visibility.Visible;
+            panelRealExamsView.Visibility = Visibility.Visible;
+            panelPracticeExamsView.Visibility = Visibility.Collapsed;
             panelHistoryView.Visibility = Visibility.Collapsed;
-            panelProfileView.Visibility = Visibility.Collapsed;
+
+            CheckForActiveAttempt();
+            LoadExams();
+        }
+
+        private void BtnNavPracticeExams_Click(object sender, RoutedEventArgs e)
+        {
+            _onlySavedMode = false;
+            SetActiveNavButton(btnNavPracticeExams);
+
+            txtHeaderTitle.Text = "Thư viện đề Luyện tập";
+            txtPracticeSectionHeading.Text = "Danh sách đề luyện tập";
+            bannerPracticeWelcome.Visibility = Visibility.Visible;
+
+            panelRealExamsView.Visibility = Visibility.Collapsed;
+            panelPracticeExamsView.Visibility = Visibility.Visible;
+            panelHistoryView.Visibility = Visibility.Collapsed;
 
             CheckForActiveAttempt();
             LoadExams();
@@ -193,13 +260,14 @@ namespace QuizzApp.GUI
             SetActiveNavButton(btnNavSaved);
 
             txtHeaderTitle.Text = "Đề thi đã lưu";
-            txtExamSectionHeading.Text = "Đề đã lưu của bạn";
-            bannerWelcome.Visibility = Visibility.Collapsed;
+            txtPracticeSectionHeading.Text = "Đề đã lưu của bạn";
+            bannerPracticeWelcome.Visibility = Visibility.Collapsed;
 
-            panelExamsView.Visibility = Visibility.Visible;
+            panelRealExamsView.Visibility = Visibility.Collapsed;
+            panelPracticeExamsView.Visibility = Visibility.Visible;
             panelHistoryView.Visibility = Visibility.Collapsed;
-            panelProfileView.Visibility = Visibility.Collapsed;
 
+            CheckForActiveAttempt();
             LoadExams();
         }
 
@@ -209,9 +277,10 @@ namespace QuizzApp.GUI
 
             txtHeaderTitle.Text = "Lịch sử làm bài";
 
-            panelExamsView.Visibility = Visibility.Collapsed;
+            panelRealExamsView.Visibility = Visibility.Collapsed;
+            panelPracticeExamsView.Visibility = Visibility.Collapsed;
             panelHistoryView.Visibility = Visibility.Visible;
-            panelProfileView.Visibility = Visibility.Collapsed;
+            bannerResumeAttempt.Visibility = Visibility.Collapsed;
 
             LoadHistoryView();
         }
@@ -237,24 +306,14 @@ namespace QuizzApp.GUI
             }
         }
 
-        private void BtnNavSettings_Click(object sender, RoutedEventArgs e)
-        {
-            SetActiveNavButton(btnNavSettings);
-            txtHeaderTitle.Text = "Cài đặt & Sao lưu hệ thống";
-
-            panelExamsView.Visibility = Visibility.Collapsed;
-            panelHistoryView.Visibility = Visibility.Collapsed;
-            panelProfileView.Visibility = Visibility.Visible;
-        }
-
         private void TxtSearch_TextChanged(object sender, TextChangedEventArgs e)
         {
-            ApplyExamFilter();
+            ApplyPracticeAndSavedFilter();
         }
 
         private void CboSubjectFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            ApplyExamFilter();
+            ApplyPracticeAndSavedFilter();
         }
 
         private void BtnStartExam_Click(object sender, RoutedEventArgs e)
@@ -274,6 +333,7 @@ namespace QuizzApp.GUI
                 };
                 quizWin.ShowDialog();
 
+                LoadExams();
                 CheckForActiveAttempt();
                 UpdateHeaderStatsBadge();
                 if (quizWin.ExamCompleted)
@@ -285,13 +345,13 @@ namespace QuizzApp.GUI
 
         private void BtnToggleSaveExam_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button btn && btn.Tag is Exam exam)
+            if (sender is Button btn && btn.Tag is Exam exam && exam.IsPracticeMode)
             {
                 exam.IsSaved = !exam.IsSaved;
                 QuizService.ToggleSaveExam(exam.Id, exam.IsSaved);
                 if (_onlySavedMode)
                 {
-                    ApplyExamFilter();
+                    ApplyPracticeAndSavedFilter();
                 }
             }
         }
@@ -306,59 +366,6 @@ namespace QuizzApp.GUI
                 QuizService.ClearExamHistory(uid);
                 LoadHistoryView();
                 UpdateHeaderStatsBadge();
-            }
-        }
-
-        private void BtnBackupDb_Click(object sender, RoutedEventArgs e)
-        {
-            var dlg = new SaveFileDialog
-            {
-                Title = "Chọn nơi lưu file sao lưu CSDL",
-                Filter = "SQLite Database (*.db)|*.db",
-                FileName = $"QuizMaster_Backup_{DateTime.Now:yyyyMMdd_HHmm}.db"
-            };
-            if (dlg.ShowDialog() == true)
-            {
-                try
-                {
-                    QuizService.BackupDatabase(dlg.FileName);
-                    MessageBox.Show($"Đã sao lưu cơ sở dữ liệu thành công tại:\n{dlg.FileName}", "Thành công", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Lỗi khi sao lưu: {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-            }
-        }
-
-        private void BtnRestoreDb_Click(object sender, RoutedEventArgs e)
-        {
-            var dlg = new OpenFileDialog
-            {
-                Title = "Chọn file sao lưu CSDL để khôi phục",
-                Filter = "SQLite Database (*.db)|*.db"
-            };
-            if (dlg.ShowDialog() == true)
-            {
-                var confirm = MessageBox.Show(
-                    "Khôi phục CSDL sẽ ghi đè dữ liệu hiện tại bằng dữ liệu trong bản sao lưu.\nBạn có chắc chắn muốn tiếp tục?",
-                    "Xác nhận khôi phục", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-
-                if (confirm == MessageBoxResult.Yes)
-                {
-                    try
-                    {
-                        QuizService.RestoreDatabase(dlg.FileName);
-                        LoadSubjectFilters();
-                        LoadExams();
-                        UpdateHeaderStatsBadge();
-                        MessageBox.Show("Đã khôi phục cơ sở dữ liệu thành công!", "Thành công", MessageBoxButton.OK, MessageBoxImage.Information);
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Lỗi khi khôi phục: {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-                }
             }
         }
 

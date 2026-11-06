@@ -4,6 +4,8 @@ using System.Data.Entity;
 using System.Data.Entity.Infrastructure;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Xml.Linq;
 using MySql.Data.EntityFramework;
 using MySql.Data.MySqlClient;
@@ -11,7 +13,7 @@ using QuizzApp.DAL.Entities;
 
 namespace QuizzApp.DAL
 {
-    // 1. Bộ khởi tạo kiểm tra trực tiếp bảng Users: nếu chưa có bảng sẽ tự động tạo đủ 8 bảng và nạp Seed Data
+    // 1. Bộ khởi tạo kiểm tra trực tiếp bảng Users: nếu chưa có bảng sẽ tự động tạo đủ 9 bảng chuẩn MySQL và nạp Seed Data
     public class QuizzMySqlInitializer : IDatabaseInitializer<QuizzDbContext>
     {
         public void InitializeDatabase(QuizzDbContext context)
@@ -23,36 +25,104 @@ namespace QuizzApp.DAL
 
             if (tableCount == 0)
             {
-                // Tự động lấy kịch bản SQL từ 8 class Models và tạo bảng trên MySQL
+                // Tự động lấy kịch bản SQL từ 9 class Models và tạo bảng trên MySQL
                 string createScript = ((IObjectContextAdapter)context).ObjectContext.CreateDatabaseScript();
                 context.Database.ExecuteSqlCommand(createScript);
 
                 // Nạp dữ liệu mẫu ban đầu
                 Seed(context);
             }
+            else
+            {
+                // Tự động nâng cấp Schema nếu Database đã được tạo từ phiên bản cũ
+                EnsureUpgradedSchema(context);
+            }
+        }
 
-            // Đảm bảo bảng đồng bộ Metadata dùng chung trên mạng LAN luôn tồn tại
+        private static void EnsureUpgradedSchema(QuizzDbContext context)
+        {
             context.Database.ExecuteSqlCommand(
-                "CREATE TABLE IF NOT EXISTS `QuizzAppMetaItems` (" +
-                "`Category` VARCHAR(32) NOT NULL, " +
-                "`ItemKey` VARCHAR(64) NOT NULL, " +
-                "`XmlData` LONGTEXT NOT NULL, " +
-                "`UpdatedAt` DATETIME NOT NULL, " +
-                "PRIMARY KEY (`Category`, `ItemKey`)" +
+                "CREATE TABLE IF NOT EXISTS `Chapters` (" +
+                "`Id` INT NOT NULL AUTO_INCREMENT, " +
+                "`SubjectId` INT NOT NULL, " +
+                "`Name` VARCHAR(200) NOT NULL, " +
+                "PRIMARY KEY (`Id`), " +
+                "INDEX `IX_SubjectId` (`SubjectId`)" +
                 ") CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
             );
+
+            EnsureColumnExists(context, "Questions", "ChapterId", "INT NOT NULL DEFAULT 1");
+            EnsureColumnExists(context, "Questions", "Explanation", "LONGTEXT NULL");
+
+            EnsureColumnExists(context, "Exams", "Code", "VARCHAR(50) NULL DEFAULT 'QUIZ'");
+            EnsureColumnExists(context, "Exams", "Description", "LONGTEXT NULL");
+            EnsureColumnExists(context, "Exams", "ShuffleQuestions", "TINYINT(1) NOT NULL DEFAULT 1");
+            EnsureColumnExists(context, "Exams", "ShuffleAnswers", "TINYINT(1) NOT NULL DEFAULT 0");
+            EnsureColumnExists(context, "Exams", "Mode", "VARCHAR(20) NULL DEFAULT 'Real'");
+            EnsureColumnExists(context, "Exams", "IsSaved", "TINYINT(1) NOT NULL DEFAULT 0");
+            EnsureColumnExists(context, "Exams", "ExamStartTime", "DATETIME NULL");
+            EnsureColumnExists(context, "Exams", "IsManuallyOpened", "TINYINT(1) NOT NULL DEFAULT 1");
+
+            EnsureColumnExists(context, "ExamAttempts", "RandomSeed", "INT NOT NULL DEFAULT 0");
+            EnsureColumnExists(context, "ExamAttempts", "Status", "VARCHAR(30) NULL DEFAULT 'InProgress'");
+
+            EnsureColumnExists(context, "AttemptDetails", "SelectedOptions", "VARCHAR(50) NULL DEFAULT ''");
+            EnsureColumnExists(context, "AttemptDetails", "IsFlagged", "TINYINT(1) NOT NULL DEFAULT 0");
+        }
+
+        private static void EnsureColumnExists(QuizzDbContext context, string tableName, string columnName, string columnDefinition)
+        {
+            try
+            {
+                int colCount = context.Database.SqlQuery<int>(
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND LOWER(table_name) = @p0 AND LOWER(column_name) = @p1;",
+                    tableName.ToLowerInvariant(),
+                    columnName.ToLowerInvariant()
+                ).FirstOrDefault();
+
+                if (colCount == 0)
+                {
+                    context.Database.ExecuteSqlCommand(
+                        string.Format("ALTER TABLE `{0}` ADD COLUMN `{1}` {2};", tableName, columnName, columnDefinition)
+                    );
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static string HashDefaultPassword(string plainPassword)
+        {
+            byte[] saltBytes = new byte[16];
+            using (var rng = new RNGCryptoServiceProvider())
+            {
+                rng.GetBytes(saltBytes);
+            }
+            string saltBase64 = Convert.ToBase64String(saltBytes);
+            using (var sha = SHA256.Create())
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(saltBase64 + ":" + plainPassword);
+                byte[] hash = sha.ComputeHash(bytes);
+                return "$QM256S$" + saltBase64 + "$" + Convert.ToBase64String(hash);
+            }
         }
 
         private void Seed(QuizzDbContext context)
         {
-            // Tạo 3 tài khoản mẫu (Mật khẩu: 123456)
-            context.Users.Add(new User { Username = "admin", PasswordHash = "123456", FullName = "Quản trị viên", Role = "Admin" });
-            context.Users.Add(new User { Username = "gv1", PasswordHash = "123456", FullName = "Giảng viên .NET", Role = "Teacher" });
-            context.Users.Add(new User { Username = "sv1", PasswordHash = "123456", FullName = "Nguyễn Văn A", Role = "Student" });
+            // Tạo 3 tài khoản mẫu (Mật khẩu mặc định: 123456 - đã được băm bảo mật kèm Salt)
+            context.Users.Add(new User { Username = "admin", PasswordHash = HashDefaultPassword("123456"), FullName = "Quản trị viên", Role = "Admin" });
+            context.Users.Add(new User { Username = "gv1", PasswordHash = HashDefaultPassword("123456"), FullName = "Giảng viên .NET", Role = "Teacher" });
+            context.Users.Add(new User { Username = "sv1", PasswordHash = HashDefaultPassword("123456"), FullName = "Nguyễn Văn A", Role = "Student" });
 
             // Tạo môn học mẫu
             var subject = new Subject { SubjectCode = "NET101", SubjectName = "Công nghệ .NET" };
             context.Subjects.Add(subject);
+            context.SaveChanges();
+
+            // Tạo chương mẫu
+            var chapter = new Chapter { SubjectId = subject.Id, Name = "Chương 1: XAML & Bố cục Layout" };
+            context.Chapters.Add(chapter);
             context.SaveChanges();
 
             // Tạo câu hỏi mẫu kèm 4 đáp án A, B, C, D
@@ -61,6 +131,8 @@ namespace QuizzApp.DAL
                 Content = "Trong WPF, điều khiển nào giúp sắp xếp các phần tử theo dạng bảng gồm các dòng và cột?",
                 DifficultyLevel = 1,
                 SubjectId = subject.Id,
+                ChapterId = chapter.Id,
+                Explanation = "Grid hỗ trợ chia bố cục theo dòng (RowDefinitions) và cột (ColumnDefinitions).",
                 QuestionOptions = new List<QuestionOption>
                 {
                     new QuestionOption { OptionContent = "StackPanel", IsCorrect = false },
@@ -83,11 +155,6 @@ namespace QuizzApp.DAL
 
         private static string GetBaseDirectory()
         {
-            string asmDir = Path.GetDirectoryName(typeof(QuizzDbContext).Assembly.Location);
-            if (!string.IsNullOrEmpty(asmDir) && File.Exists(Path.Combine(asmDir, "QuizzApp.DAL.exe")))
-            {
-                return asmDir;
-            }
             return AppDomain.CurrentDomain.BaseDirectory;
         }
 
@@ -95,38 +162,13 @@ namespace QuizzApp.DAL
         public static string Port { get; private set; } = "3306";
         public static string DbName { get; private set; } = "QuizzAppDB";
         public static string DbUser { get; private set; } = "root";
-        public static string DbPass { get; private set; } = "12345678";
+        public static string DbPass { get; private set; } = "DaoAnhVu18032005.";
 
         private static bool _configLoaded = false;
         private static bool _databaseEnsured = false;
 
         static QuizzDbContext()
         {
-            AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
-            {
-                try
-                {
-                    var asmName = new System.Reflection.AssemblyName(args.Name).Name;
-                    string candidate1 = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, asmName + ".dll");
-                    if (File.Exists(candidate1))
-                    {
-                        return System.Reflection.Assembly.LoadFrom(candidate1);
-                    }
-                    string asmDir = Path.GetDirectoryName(typeof(QuizzDbContext).Assembly.Location);
-                    if (!string.IsNullOrEmpty(asmDir))
-                    {
-                        string candidate2 = Path.Combine(asmDir, asmName + ".dll");
-                        if (File.Exists(candidate2))
-                        {
-                            return System.Reflection.Assembly.LoadFrom(candidate2);
-                        }
-                    }
-                }
-                catch
-                {
-                }
-                return null;
-            };
             LoadConfiguration();
         }
 
@@ -136,7 +178,7 @@ namespace QuizzApp.DAL
             {
                 try
                 {
-                    // 1. Đọc từ App.config nếu có cấu hình <appSettings>
+                    // Đọc cấu hình trực tiếp từ App.config (<appSettings>)
                     string appConfigPath = AppDomain.CurrentDomain.SetupInformation.ConfigurationFile;
                     if (!string.IsNullOrEmpty(appConfigPath) && File.Exists(appConfigPath))
                     {
@@ -154,26 +196,6 @@ namespace QuizzApp.DAL
                                 }
                             }
                         }
-                    }
-
-                    // 2. Ưu tiên đọc từ file db_config.xml cạnh file .exe (nếu người dùng đã cấu hình qua giao diện hoặc sửa file)
-                    if (File.Exists(ConfigFilePath))
-                    {
-                        var doc = XDocument.Load(ConfigFilePath);
-                        var root = doc.Root;
-                        if (root != null)
-                        {
-                            ServerHost = GetElementValue(root, "ServerHost", ServerHost);
-                            Port = GetElementValue(root, "Port", Port);
-                            DbName = GetElementValue(root, "DbName", DbName);
-                            DbUser = GetElementValue(root, "DbUser", DbUser);
-                            DbPass = GetElementValue(root, "DbPass", DbPass);
-                        }
-                    }
-                    else
-                    {
-                        // Tự động sinh file db_config.xml mẫu để quản trị viên dễ chỉnh sửa khi triển khai LAN
-                        SaveConfiguration(ServerHost, Port, DbName, DbUser, DbPass);
                     }
                 }
                 catch
@@ -334,6 +356,7 @@ namespace QuizzApp.DAL
 
         public DbSet<User> Users { get; set; }
         public DbSet<Subject> Subjects { get; set; }
+        public DbSet<Chapter> Chapters { get; set; }
         public DbSet<Question> Questions { get; set; }
         public DbSet<QuestionOption> QuestionOptions { get; set; }
         public DbSet<Exam> Exams { get; set; }
@@ -343,6 +366,12 @@ namespace QuizzApp.DAL
 
         protected override void OnModelCreating(DbModelBuilder modelBuilder)
         {
+            modelBuilder.Entity<Chapter>()
+                .HasRequired(c => c.Subject)
+                .WithMany(s => s.Chapters)
+                .HasForeignKey(c => c.SubjectId)
+                .WillCascadeOnDelete(false);
+
             modelBuilder.Entity<ExamQuestion>()
                 .HasRequired(eq => eq.Question)
                 .WithMany(q => q.ExamQuestions)

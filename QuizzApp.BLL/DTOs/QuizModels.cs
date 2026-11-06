@@ -42,25 +42,68 @@ namespace QuizzApp.BLL
     public static class PasswordHasher
     {
         private const string StaticSalt = "QuizMaster_v1_Salt_2026";
+        private const string DynamicPrefix = "$QM256S$";
+        private const string LegacyPrefix = "$QM256$";
 
         public static string Hash(string plainPassword)
         {
             if (string.IsNullOrEmpty(plainPassword)) return "";
+
+            byte[] saltBytes = new byte[16];
+            using (var rng = new RNGCryptoServiceProvider())
+            {
+                rng.GetBytes(saltBytes);
+            }
+            string saltBase64 = Convert.ToBase64String(saltBytes);
+            return ComputeDynamicSaltedHash(plainPassword, saltBase64);
+        }
+
+        private static string ComputeDynamicSaltedHash(string plainPassword, string saltBase64)
+        {
+            using (var sha = SHA256.Create())
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(saltBase64 + ":" + plainPassword);
+                byte[] hash = sha.ComputeHash(bytes);
+                return DynamicPrefix + saltBase64 + "$" + Convert.ToBase64String(hash);
+            }
+        }
+
+        private static string ComputeLegacyStaticHash(string plainPassword)
+        {
             using (var sha = SHA256.Create())
             {
                 byte[] bytes = Encoding.UTF8.GetBytes(plainPassword + StaticSalt);
                 byte[] hash = sha.ComputeHash(bytes);
-                return "$QM256$" + Convert.ToBase64String(hash);
+                return LegacyPrefix + Convert.ToBase64String(hash);
             }
+        }
+
+        public static bool IsDynamicSaltedHash(string storedPasswordOrHash)
+        {
+            return !string.IsNullOrEmpty(storedPasswordOrHash) &&
+                   storedPasswordOrHash.StartsWith(DynamicPrefix, StringComparison.Ordinal);
         }
 
         public static bool Verify(string plainPassword, string storedPasswordOrHash)
         {
             if (string.IsNullOrEmpty(storedPasswordOrHash)) return false;
-            if (storedPasswordOrHash.StartsWith("$QM256$"))
+
+            if (storedPasswordOrHash.StartsWith(DynamicPrefix, StringComparison.Ordinal))
             {
-                return string.Equals(Hash(plainPassword), storedPasswordOrHash, StringComparison.Ordinal);
+                string payload = storedPasswordOrHash.Substring(DynamicPrefix.Length);
+                int sepIdx = payload.IndexOf('$');
+                if (sepIdx <= 0) return false;
+
+                string saltBase64 = payload.Substring(0, sepIdx);
+                string expected = ComputeDynamicSaltedHash(plainPassword ?? "", saltBase64);
+                return string.Equals(expected, storedPasswordOrHash, StringComparison.Ordinal);
             }
+
+            if (storedPasswordOrHash.StartsWith(LegacyPrefix, StringComparison.Ordinal))
+            {
+                return string.Equals(ComputeLegacyStaticHash(plainPassword ?? ""), storedPasswordOrHash, StringComparison.Ordinal);
+            }
+
             return string.Equals(plainPassword, storedPasswordOrHash, StringComparison.Ordinal);
         }
     }
@@ -87,18 +130,8 @@ namespace QuizzApp.BLL
         {
             get
             {
-                return IsAdmin ? "Giáo viên (Admin)" : "Học sinh (Thí sinh)";
+                return IsAdmin ? "Giáo viên" : "Học sinh";
             }
-        }
-
-        public string RoleBadgeBg
-        {
-            get { return IsAdmin ? "#DBEAFE" : "#DCFCE7"; }
-        }
-
-        public string RoleBadgeFg
-        {
-            get { return IsAdmin ? "#1D4ED8" : "#15803D"; }
         }
 
         public string UsernameDisplay
@@ -108,7 +141,7 @@ namespace QuizzApp.BLL
 
         public string CreatedAtDisplay
         {
-            get { return string.IsNullOrWhiteSpace(CreatedAt) ? "Hệ thống MySQL" : "Ngày tạo: " + CreatedAt; }
+            get { return string.IsNullOrWhiteSpace(CreatedAt) ? "" : "Ngày tạo: " + CreatedAt; }
         }
     }
 
@@ -163,8 +196,24 @@ namespace QuizzApp.BLL
         public bool ShuffleQuestions { get; set; }
         public bool ShuffleAnswers { get; set; }
         public string Mode { get; set; } = "Real"; // "Real" or "Practice"
-        public string IconBg { get; set; } = "#DBEAFE";
-        public string IconFg { get; set; } = "#1D4ED8";
+        public DateTime? ExamStartTime { get; set; }
+
+        private bool _isManuallyOpened;
+        public bool IsManuallyOpened
+        {
+            get { return _isManuallyOpened; }
+            set
+            {
+                if (_isManuallyOpened != value)
+                {
+                    _isManuallyOpened = value;
+                    OnPropertyChanged(nameof(IsManuallyOpened));
+                    OnPropertyChanged(nameof(IsAvailableForStudent));
+                    OnPropertyChanged(nameof(ScheduleDisplay));
+                    OnPropertyChanged(nameof(ManualOpenButtonText));
+                }
+            }
+        }
 
         private bool _isSaved;
         public bool IsSaved
@@ -177,8 +226,6 @@ namespace QuizzApp.BLL
                     _isSaved = value;
                     OnPropertyChanged(nameof(IsSaved));
                     OnPropertyChanged(nameof(SaveButtonText));
-                    OnPropertyChanged(nameof(SaveButtonBg));
-                    OnPropertyChanged(nameof(SaveButtonFg));
                 }
             }
         }
@@ -191,16 +238,6 @@ namespace QuizzApp.BLL
         public string ModeDisplay
         {
             get { return IsPracticeMode ? "Luyện tập" : "Thi thật"; }
-        }
-
-        public string ModeBadgeBg
-        {
-            get { return IsPracticeMode ? "#FEF3C7" : "#DBEAFE"; }
-        }
-
-        public string ModeBadgeFg
-        {
-            get { return IsPracticeMode ? "#B45309" : "#1D4ED8"; }
         }
 
         public string SubjectDisplay
@@ -234,14 +271,60 @@ namespace QuizzApp.BLL
             get { return IsSaved ? "★ Đã lưu" : "☆ Lưu đề"; }
         }
 
-        public string SaveButtonBg
+        public bool IsAvailableForStudent
         {
-            get { return IsSaved ? "#FEF3C7" : "#E2E8F0"; }
+            get
+            {
+                if (IsPracticeMode) return true;
+                if (IsManuallyOpened) return true;
+                if (ExamStartTime.HasValue)
+                {
+                    return DateTime.Now >= ExamStartTime.Value.AddMinutes(-5);
+                }
+                return false;
+            }
         }
 
-        public string SaveButtonFg
+        public bool HasScheduledTime
         {
-            get { return IsSaved ? "#B45309" : "#334155"; }
+            get { return !IsPracticeMode && ExamStartTime.HasValue; }
+        }
+
+        public string ScheduledTimeBadgeText
+        {
+            get
+            {
+                if (!IsPracticeMode && ExamStartTime.HasValue)
+                {
+                    return string.Format("🕒 Giờ thi: {0:HH:mm dd/MM/yyyy}", ExamStartTime.Value);
+                }
+                return "";
+            }
+        }
+
+        public string ScheduleDisplay
+        {
+            get
+            {
+                if (IsPracticeMode) return "Mở tự do";
+                string timePart = ExamStartTime.HasValue
+                    ? string.Format("Giờ thi: {0:HH:mm dd/MM/yyyy}", ExamStartTime.Value)
+                    : "Chưa đặt giờ thi";
+                if (IsManuallyOpened)
+                {
+                    return timePart + "  •  Đang mở thủ công";
+                }
+                if (ExamStartTime.HasValue && DateTime.Now >= ExamStartTime.Value.AddMinutes(-5))
+                {
+                    return timePart + "  •  Đã mở theo giờ";
+                }
+                return timePart + "  •  Chưa mở";
+            }
+        }
+
+        public string ManualOpenButtonText
+        {
+            get { return IsManuallyOpened ? "🔒 Đóng mở thủ công" : "🔓 Mở đề thủ công"; }
         }
 
         public event PropertyChangedEventHandler PropertyChanged;
@@ -323,26 +406,6 @@ namespace QuizzApp.BLL
                 if (string.Equals(Difficulty, "Hard", StringComparison.OrdinalIgnoreCase)) return "Khó";
                 if (string.Equals(Difficulty, "Medium", StringComparison.OrdinalIgnoreCase)) return "Trung bình";
                 return "Dễ";
-            }
-        }
-
-        public string DifficultyBg
-        {
-            get
-            {
-                if (string.Equals(Difficulty, "Hard", StringComparison.OrdinalIgnoreCase)) return "#FEE2E2";
-                if (string.Equals(Difficulty, "Medium", StringComparison.OrdinalIgnoreCase)) return "#FEF3C7";
-                return "#DCFCE7";
-            }
-        }
-
-        public string DifficultyFg
-        {
-            get
-            {
-                if (string.Equals(Difficulty, "Hard", StringComparison.OrdinalIgnoreCase)) return "#B91C1C";
-                if (string.Equals(Difficulty, "Medium", StringComparison.OrdinalIgnoreCase)) return "#B45309";
-                return "#15803D";
             }
         }
 
@@ -464,6 +527,11 @@ namespace QuizzApp.BLL
         public string CompletedAt { get; set; }
         public string Status { get; set; } = "Submitted";
 
+        public bool IsPassed
+        {
+            get { return Score >= 5.0; }
+        }
+
         public string ScoreText
         {
             get { return string.Format("{0:0.0} / 10", Score); }
@@ -479,7 +547,7 @@ namespace QuizzApp.BLL
             get
             {
                 return string.Equals(Status, "AutoSubmitted", StringComparison.OrdinalIgnoreCase)
-                    ? "Tự nộp (Hết giờ)"
+                    ? "Tự động nộp"
                     : "Đã nộp bài";
             }
         }
@@ -489,7 +557,7 @@ namespace QuizzApp.BLL
             get
             {
                 return string.IsNullOrEmpty(StudentName)
-                    ? string.Format("{0} ({1})", CompletedAt, StatusTypeText)
+                    ? string.Format("{0}  •  {1}", CompletedAt, StatusTypeText)
                     : string.Format("Học sinh: {0}  •  {1}  •  {2}", StudentName, CompletedAt, StatusTypeText);
             }
         }
@@ -506,17 +574,7 @@ namespace QuizzApp.BLL
 
         public string StatusBadgeText
         {
-            get { return Score >= 5.0 ? "Đạt" : "Chưa đạt"; }
-        }
-
-        public string StatusBadgeBg
-        {
-            get { return Score >= 5.0 ? "#DCFCE7" : "#FEE2E2"; }
-        }
-
-        public string StatusBadgeFg
-        {
-            get { return Score >= 5.0 ? "#15803D" : "#B91C1C"; }
+            get { return IsPassed ? "Đạt" : "Chưa đạt"; }
         }
     }
 
@@ -534,7 +592,7 @@ namespace QuizzApp.BLL
             get
             {
                 return TotalAttempts > 0
-                    ? string.Format("Sai {0}/{1} lượt ({2}%)", WrongCount, TotalAttempts, (WrongCount * 100 / TotalAttempts))
+                    ? string.Format("Sai {0}/{1} lượt", WrongCount, TotalAttempts)
                     : string.Format("Sai {0} lượt", WrongCount);
             }
         }

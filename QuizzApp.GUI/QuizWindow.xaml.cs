@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -92,7 +92,7 @@ namespace QuizzApp.GUI
             }
 
             txtExamTitle.Text = $"Đề: {_exam.Title}";
-            txtExamModeBadge.Text = _exam.IsPracticeMode ? "Chế độ Luyện tập" : "Chế độ Thi thật (Khóa chuyển tab)";
+            txtExamModeBadge.Text = _exam.IsPracticeMode ? "Chế độ Luyện tập" : "Chế độ Thi thật";
             badgeExamMode.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_exam.IsPracticeMode ? "#D97706" : "#3563E9"));
 
             if (_exam.IsPracticeMode)
@@ -269,7 +269,7 @@ namespace QuizzApp.GUI
                 {
                     _timer.Stop();
                     _isShowingInternalDialog = true;
-                    MessageBox.Show(this, "Đã hết thời gian làm bài! Hệ thống tự động thu bài và chấm điểm (AutoSubmitted).",
+                    MessageBox.Show(this, "Đã hết thời gian làm bài! Hệ thống tự động thu bài và chấm điểm.",
                         "Hết giờ làm bài", MessageBoxButton.OK, MessageBoxImage.Information);
                     _isShowingInternalDialog = false;
                     SubmitQuiz(isAutoSubmitted: true);
@@ -385,8 +385,12 @@ namespace QuizzApp.GUI
             txtQuestionContent.Text = q.QuestionText;
 
             txtDifficultyBadge.Text = $"Độ khó: {q.DifficultyDisplay}";
-            badgeDifficulty.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(q.DifficultyBg));
-            txtDifficultyBadge.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(q.DifficultyFg));
+            string diffBgHex = string.Equals(q.Difficulty, "Hard", StringComparison.OrdinalIgnoreCase) ? "#FEE2E2"
+                : (string.Equals(q.Difficulty, "Medium", StringComparison.OrdinalIgnoreCase) ? "#FEF3C7" : "#DCFCE7");
+            badgeDifficulty.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(diffBgHex));
+            string diffFgHex = string.Equals(q.Difficulty, "Hard", StringComparison.OrdinalIgnoreCase) ? "#B91C1C"
+                : (string.Equals(q.Difficulty, "Medium", StringComparison.OrdinalIgnoreCase) ? "#B45309" : "#15803D");
+            txtDifficultyBadge.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(diffFgHex));
 
             txtQuestionTypeBadge.Text = q.IsMultipleChoice ? "☑ Chọn nhiều đáp án đúng" : "◉ Chọn 1 đáp án đúng";
 
@@ -398,7 +402,18 @@ namespace QuizzApp.GUI
             btnPrev.IsEnabled = _currentIndex > 0;
             btnNext.IsEnabled = _currentIndex < _questions.Count - 1;
 
-            btnFlagQuestion.Content = q.IsFlagged ? "⚑ Bỏ đánh dấu" : "⚑ Đánh dấu xem lại";
+            string flagText = q.IsFlagged ? "⚑ Đã đánh dấu chưa chắc chắn" : "⚑ Đánh dấu câu chưa chắc chắn";
+            var flagBg = new SolidColorBrush((Color)ColorConverter.ConvertFromString(q.IsFlagged ? "#FEF3C7" : "#FFFFFF"));
+            var flagFg = new SolidColorBrush((Color)ColorConverter.ConvertFromString(q.IsFlagged ? "#B45309" : "#334155"));
+            var flagBorder = new SolidColorBrush((Color)ColorConverter.ConvertFromString(q.IsFlagged ? "#F59E0B" : "#CBD5E1"));
+            btnFlagQuestion.Content = flagText;
+            btnFlagQuestion.Background = flagBg;
+            btnFlagQuestion.Foreground = flagFg;
+            btnFlagQuestion.BorderBrush = flagBorder;
+            btnHeaderFlagQuestion.Content = flagText;
+            btnHeaderFlagQuestion.Background = flagBg;
+            btnHeaderFlagQuestion.Foreground = flagFg;
+            btnHeaderFlagQuestion.BorderBrush = flagBorder;
             btnFlagQuestion.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(q.IsFlagged ? "#FEF3C7" : "#FFFFFF"));
             btnFlagQuestion.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(q.IsFlagged ? "#B45309" : "#334155"));
 
@@ -506,8 +521,8 @@ namespace QuizzApp.GUI
             int answered = _questions.Count(q => q.IsAnswered);
             int flagged = _questions.Count(q => q.IsFlagged);
             txtProgressSubtitle.Text = _isSubmitted
-                ? $"Chế độ xem lại đáp án ({answered}/{_questions.Count} câu đã làm)"
-                : $"Đã làm: {answered}/{_questions.Count} câu  •  Đánh dấu: {flagged}  •  Đã tự động lưu";
+                ? $"Chế độ xem lại đáp án  •  Đã làm: {answered}/{_questions.Count} câu"
+                : $"Đã làm: {answered}/{_questions.Count} câu  •  Chưa chắc chắn: {flagged}  •  Đã tự động lưu";
         }
 
         private void OptionA_Click(object sender, MouseButtonEventArgs e) => SelectOptionByDisplaySlot(_questions[_currentIndex].DisplayKeyA);
@@ -608,6 +623,7 @@ namespace QuizzApp.GUI
             borderResultSummary.Visibility = Visibility.Visible;
             chkFilterWrongOnly.Visibility = Visibility.Visible;
             btnFlagQuestion.Visibility = Visibility.Collapsed;
+            btnHeaderFlagQuestion.Visibility = Visibility.Collapsed;
             btnPracticeCheck.Visibility = Visibility.Collapsed;
 
             txtFinalScore.Text = $"{score:0.0} / 10";
@@ -656,7 +672,7 @@ namespace QuizzApp.GUI
                 var res = MessageBox.Show(
                     this,
                     "Bài thi chưa được nộp!\n\n" +
-                    "• Chọn [Yes] để Tạm dừng & Lưu tiến độ (lần sau mở ứng dụng có thể làm tiếp).\n" +
+                    "• Chọn [Yes] để Tạm dừng và lưu tiến độ làm bài.\n" +
                     "• Chọn [No] để Hủy bỏ lượt thi này.\n" +
                     "• Chọn [Cancel] để ở lại tiếp tục làm bài.",
                     "Tạm dừng bài thi",

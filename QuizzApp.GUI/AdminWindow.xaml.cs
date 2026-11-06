@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -44,7 +44,7 @@ namespace QuizzApp.GUI
             txtKpiSubjects.Text = $"{_subjects.Count} môn học";
             txtKpiExams.Text = $"{_exams.Count} đề thi";
             txtKpiQuestions.Text = $"{totalQuestions} câu hỏi";
-            txtKpiSubmissions.Text = $"{allHistory.Count} lượt (TB: {avgScore:0.0})";
+            txtKpiSubmissions.Text = $"{allHistory.Count} lượt • TB: {avgScore:0.0}";
 
             // Populate Subject Dropdowns & List
             int prevSubjId = (cboExamSubject.SelectedItem as Subject)?.Id ?? 0;
@@ -248,6 +248,51 @@ namespace QuizzApp.GUI
             RefreshDashboardData();
         }
 
+        private void CboExamMode_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (borderExamScheduleBox == null || cboExamMode == null) return;
+            string mode = (cboExamMode.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Real";
+            borderExamScheduleBox.Visibility = string.Equals(mode, "Practice", StringComparison.OrdinalIgnoreCase)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+
+        private void BtnToggleManualOpenExam_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is Exam exam && !exam.IsPracticeMode)
+            {
+                exam.IsManuallyOpened = !exam.IsManuallyOpened;
+                QuizService.ToggleManualOpenExam(exam.Id, exam.IsManuallyOpened);
+                ApplyExamFilter();
+            }
+        }
+
+        private bool TryGetExamScheduleInputs(string mode, out DateTime? examStartTime, out bool isManuallyOpened, out string errorMessage)
+        {
+            examStartTime = null;
+            isManuallyOpened = false;
+            errorMessage = "";
+
+            if (string.Equals(mode, "Practice", StringComparison.OrdinalIgnoreCase))
+            {
+                isManuallyOpened = true;
+                return true;
+            }
+
+            isManuallyOpened = chkManualOpenExam?.IsChecked == true;
+            DateTime selectedDate = dpExamStartDate?.SelectedDate ?? DateTime.Today;
+            string timeRaw = (txtExamStartTime?.Text ?? "").Trim();
+
+            if (!TimeSpan.TryParse(timeRaw, out TimeSpan timeOfDay))
+            {
+                errorMessage = "Giờ thi không hợp lệ! Vui lòng nhập đúng định dạng HH:mm, ví dụ 08:30 hoặc 14:00.";
+                return false;
+            }
+
+            examStartTime = selectedDate.Date.Add(timeOfDay);
+            return true;
+        }
+
         private void CboExamSubject_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             UpdateMatrixAvailabilityLabel();
@@ -326,6 +371,10 @@ namespace QuizzApp.GUI
             if (subj != null) cboExamSubject.SelectedItem = subj;
 
             cboExamMode.SelectedIndex = exam.IsPracticeMode ? 1 : 0;
+            dpExamStartDate.SelectedDate = (exam.ExamStartTime ?? DateTime.Now).Date;
+            txtExamStartTime.Text = (exam.ExamStartTime ?? DateTime.Now).ToString("HH:mm");
+            chkManualOpenExam.IsChecked = exam.IsManuallyOpened;
+            if (borderExamScheduleBox != null) borderExamScheduleBox.Visibility = exam.IsPracticeMode ? Visibility.Collapsed : Visibility.Visible;
 
             btnSaveExam.Content = "💾  Cập nhật thông tin đề thi";
             btnDeleteExam.Visibility = Visibility.Visible;
@@ -349,6 +398,10 @@ namespace QuizzApp.GUI
             chkShuffleQuestions.IsChecked = true;
             chkShuffleAnswers.IsChecked = false;
             cboExamMode.SelectedIndex = 0;
+            if (dpExamStartDate != null) dpExamStartDate.SelectedDate = DateTime.Today;
+            if (txtExamStartTime != null) txtExamStartTime.Text = DateTime.Now.AddMinutes(10).ToString("HH:mm");
+            if (chkManualOpenExam != null) chkManualOpenExam.IsChecked = false;
+            if (borderExamScheduleBox != null) borderExamScheduleBox.Visibility = Visibility.Visible;
             btnSaveExam.Content = "💾  Lưu đề thi thủ công";
             btnDeleteExam.Visibility = Visibility.Collapsed;
             btnOpenQuestionsFromEditor.Visibility = Visibility.Collapsed;
@@ -367,7 +420,7 @@ namespace QuizzApp.GUI
 
             if (!int.TryParse(txtExamDuration.Text.Trim(), out int duration) || duration <= 0)
             {
-                MessageBox.Show("Thời gian làm bài phải là số nguyên dương (phút)!", "Thông báo", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show("Thời gian làm bài phải là số nguyên dương!", "Thông báo", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -375,6 +428,11 @@ namespace QuizzApp.GUI
             string mode = (cboExamMode.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Real";
             bool shuffleQ = chkShuffleQuestions.IsChecked == true;
             bool shuffleA = chkShuffleAnswers.IsChecked == true;
+            if (!TryGetExamScheduleInputs(mode, out DateTime? examStartTime, out bool isManuallyOpened, out string schedErr))
+            {
+                MessageBox.Show(schedErr, "Thông báo", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
 
             if (_selectedExamForEdit == null)
             {
@@ -388,6 +446,8 @@ namespace QuizzApp.GUI
                     ShuffleQuestions = shuffleQ,
                     ShuffleAnswers = shuffleA,
                     Mode = mode,
+                    ExamStartTime = examStartTime,
+                    IsManuallyOpened = isManuallyOpened,
                     IsSaved = false
                 };
                 QuizService.AddExam(newExam);
@@ -402,6 +462,8 @@ namespace QuizzApp.GUI
                 _selectedExamForEdit.ShuffleQuestions = shuffleQ;
                 _selectedExamForEdit.ShuffleAnswers = shuffleA;
                 _selectedExamForEdit.Mode = mode;
+                _selectedExamForEdit.ExamStartTime = examStartTime;
+                _selectedExamForEdit.IsManuallyOpened = isManuallyOpened;
 
                 QuizService.UpdateExam(_selectedExamForEdit);
                 MessageBox.Show("Đã cập nhật thông tin đề thi thành công!", "Thành công", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -442,15 +504,22 @@ namespace QuizzApp.GUI
             int subjectId = (cboExamSubject.SelectedItem as Subject)?.Id ?? 1;
             string mode = (cboExamMode.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Real";
 
+            if (!TryGetExamScheduleInputs(mode, out DateTime? matrixStartTime, out bool matrixManualOpen, out string schedErr))
+            {
+                MessageBox.Show(schedErr, "Thông báo", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
             var examTemplate = new Exam
             {
                 Code = "QUIZ",
                 Title = title,
-                Description = string.IsNullOrEmpty(desc) ? $"Đề sinh tự động theo ma trận ({easyReq} Dễ, {medReq} TB, {hardReq} Khó)" : desc,
+                Description = string.IsNullOrEmpty(desc) ? "Đề sinh tự động theo ma trận" : desc,
                 SubjectId = subjectId,
                 DurationMinutes = duration,
                 ShuffleQuestions = chkShuffleQuestions.IsChecked == true,
                 ShuffleAnswers = chkShuffleAnswers.IsChecked == true,
+                ExamStartTime = matrixStartTime,
+                IsManuallyOpened = matrixManualOpen,
                 Mode = mode
             };
 
@@ -560,13 +629,13 @@ namespace QuizzApp.GUI
                 }
 
                 lstQuestions.ItemsSource = questions;
-                txtQuestionListCount.Text = $"Danh sách câu hỏi ({questions.Count})";
+                txtQuestionListCount.Text = $"Danh sách câu hỏi: {questions.Count}";
                 ResetQuestionForm();
             }
             else
             {
                 lstQuestions.ItemsSource = null;
-                txtQuestionListCount.Text = "Danh sách câu hỏi (0)";
+                txtQuestionListCount.Text = "Danh sách câu hỏi: 0";
             }
         }
 
@@ -664,7 +733,7 @@ namespace QuizzApp.GUI
 
             if (validParts.Count == 0)
             {
-                MessageBox.Show("Đáp án đúng phải chứa ít nhất một ký tự A, B, C hoặc D (ví dụ: 'A' hoặc 'A,C')!", "Lỗi nhập liệu", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show("Đáp án đúng phải chứa ít nhất một ký tự A, B, C hoặc D!", "Lỗi nhập liệu", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -740,7 +809,7 @@ namespace QuizzApp.GUI
 
             var dlg = new OpenFileDialog
             {
-                Title = "Chọn file CSV ngân hàng câu hỏi (Cột: Câu hỏi, A, B, C, D, Đáp án đúng, Độ khó, Giải thích)",
+                Title = "Chọn file CSV ngân hàng câu hỏi",
                 Filter = "CSV File (*.csv)|*.csv|All Files (*.*)|*.*"
             };
             if (dlg.ShowDialog() == true)
@@ -1016,11 +1085,11 @@ namespace QuizzApp.GUI
             _selectedUserForEdit = user;
             ShowUserEditorPanel(true);
 
-            txtUserFormTitle.Text = $"Chỉnh sửa tài khoản: {user.FullName} (@{user.Username})";
+            txtUserFormTitle.Text = $"Chỉnh sửa tài khoản: {user.FullName}";
             txtUserUsername.Text = user.Username;
             txtUserFullName.Text = user.FullName;
             txtUserPassword.Text = "";
-            txtUserPasswordLabel.Text = "Mật khẩu mới (để trống nếu giữ nguyên mật khẩu cũ)";
+            txtUserPasswordLabel.Text = "Mật khẩu mới";
             cboUserRole.SelectedIndex = user.IsAdmin ? 1 : 0;
 
             btnSaveUser.Content = "💾  Cập nhật tài khoản";
@@ -1123,7 +1192,7 @@ namespace QuizzApp.GUI
             }
 
             var confirm = MessageBox.Show(
-                $"Bạn có chắc chắn muốn xóa tài khoản '{_selectedUserForEdit.FullName} (@{_selectedUserForEdit.Username})' không?",
+                $"Bạn có chắc chắn muốn xóa tài khoản '{_selectedUserForEdit.FullName}' không?",
                 "Xác nhận xóa tài khoản",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);

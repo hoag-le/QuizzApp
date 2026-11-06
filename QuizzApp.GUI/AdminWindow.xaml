@@ -1,4 +1,4 @@
-﻿<Window x:Class="QuizzApp.GUI.AdminWindow"
+<Window x:Class="QuizzApp.GUI.AdminWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Dashboard Giáo viên / Quản trị Đề thi - QUIZ MASTER"
@@ -13,6 +13,8 @@
     <Window.Resources>
         <SolidColorBrush x:Key="PrimaryColor" Color="#3563E9"/>
         <SolidColorBrush x:Key="SidebarColor" Color="#172554"/>
+        <Style x:Key="RoleBadgeBorderStyle" TargetType="Border"><Setter Property="Background" Value="#DCFCE7"/><Style.Triggers><DataTrigger Binding="{Binding IsAdmin}" Value="True"><Setter Property="Background" Value="#DBEAFE"/></DataTrigger></Style.Triggers></Style>
+        <Style x:Key="RoleBadgeTextStyle" TargetType="TextBlock"><Setter Property="Foreground" Value="#15803D"/><Style.Triggers><DataTrigger Binding="{Binding IsAdmin}" Value="True"><Setter Property="Foreground" Value="#1D4ED8"/></DataTrigger></Style.Triggers></Style>
 
         <Style x:Key="MenuButton" TargetType="Button">
             <Setter Property="Height" Value="42"/>
@@ -194,7 +196,7 @@
                             Background="#DBEAFE"
                             CornerRadius="16"
                             Padding="14,6">
-                        <TextBlock Text="Giáo viên (Admin)"
+                        <TextBlock Text="Giáo viên"
                                    Foreground="#1D4ED8"
                                    FontSize="11.5"
                                    FontWeight="Bold"/>
@@ -235,7 +237,7 @@
                 <Border Grid.Column="3" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="10" Padding="14,8" Margin="8,0,0,0">
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Lượt thi &amp; Điểm TB" FontSize="11" Foreground="#64748B"/>
-                        <TextBlock x:Name="txtKpiSubmissions" Text="0 lượt (TB: 0.0)" FontSize="17" FontWeight="Bold" Foreground="#B45309" Margin="0,2,0,0"/>
+                        <TextBlock x:Name="txtKpiSubmissions" Text="0 lượt • TB: 0.0" FontSize="17" FontWeight="Bold" Foreground="#B45309" Margin="0,2,0,0"/>
                     </StackPanel>
                 </Border>
             </Grid>
@@ -351,11 +353,12 @@
                                                         <Run Text="  •  "/>
                                                         <Run Text="{Binding DurationText, Mode=OneWay}" FontWeight="SemiBold"/>
                                                         <Run Text="  •  "/>
-                                                        <Run Text="{Binding ModeDisplay, Mode=OneWay}"/>
+                                                        <Run Text="{Binding ModeDisplay, Mode=OneWay}"/><Run Text="  •  "/><Run Text="{Binding ScheduleDisplay, Mode=OneWay}" Foreground="#0F766E" FontWeight="SemiBold"/>
                                                     </TextBlock>
                                                 </StackPanel>
 
                                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <Button Content="{Binding ManualOpenButtonText}" BorderThickness="0" Padding="12,8" Margin="0,0,8,0" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" Cursor="Hand" Tag="{Binding}" Click="BtnToggleManualOpenExam_Click"><Button.Style><Style TargetType="Button"><Setter Property="Background" Value="#FEF3C7"/><Setter Property="Foreground" Value="#B45309"/><Style.Triggers><DataTrigger Binding="{Binding IsManuallyOpened}" Value="True"><Setter Property="Background" Value="#DCFCE7"/><Setter Property="Foreground" Value="#15803D"/></DataTrigger><DataTrigger Binding="{Binding IsPracticeMode}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
                                                     <Button Content="✎ Sửa"
                                                             Background="#EFF6FF"
                                                             Foreground="#2563EB"
@@ -447,7 +450,7 @@
                                                   SelectionChanged="CboExamSubject_SelectionChanged"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1">
-                                        <TextBlock Text="Thời gian (Phút)" FontSize="11.5" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,3"/>
+                                        <TextBlock Text="Thời gian làm bài" FontSize="11.5" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,3"/>
                                         <TextBox x:Name="txtExamDuration" Style="{StaticResource InputTextBox}" Text="15"/>
                                     </StackPanel>
                                 </Grid>
@@ -477,9 +480,9 @@
 
                                     <StackPanel Grid.Column="0" Margin="0,0,10,0">
                                         <TextBlock Text="Chế độ thi" FontSize="11.5" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,3"/>
-                                        <ComboBox x:Name="cboExamMode" Height="34" SelectedIndex="0" FontSize="12.5" VerticalContentAlignment="Center">
-                                            <ComboBoxItem Content="Thi thật (Real)" Tag="Real"/>
-                                            <ComboBoxItem Content="Luyện tập (Practice)" Tag="Practice"/>
+                                        <ComboBox x:Name="cboExamMode" Height="34" SelectedIndex="0" FontSize="12.5" VerticalContentAlignment="Center" SelectionChanged="CboExamMode_SelectionChanged">
+                                            <ComboBoxItem Content="Thi thật" Tag="Real"/>
+                                            <ComboBoxItem Content="Luyện tập" Tag="Practice"/>
                                         </ComboBox>
                                     </StackPanel>
 
@@ -489,6 +492,30 @@
                                     </StackPanel>
                                 </Grid>
 
+                                <!-- Exam Schedule & Manual Open Box -->
+                                <Border x:Name="borderExamScheduleBox" Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,0,0,12">
+                                    <StackPanel>
+                                        <TextBlock Text="🕒 Cài đặt lịch thi &amp; Mở đề thi thật:" FontSize="12" FontWeight="Bold" Foreground="#1E3A8A" Margin="0,0,0,8"/>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="170"/>
+                                                <ColumnDefinition Width="130"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                                <TextBlock Text="Ngày thi" FontSize="11.5" FontWeight="SemiBold" Foreground="#1E40AF" Margin="0,0,0,4"/>
+                                                <DatePicker x:Name="dpExamStartDate" Height="34" FontSize="12.5" VerticalContentAlignment="Center"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Margin="0,0,14,0">
+                                                <TextBlock Text="Giờ thi" FontSize="11.5" FontWeight="SemiBold" Foreground="#1E40AF" Margin="0,0,0,4"/>
+                                                <TextBox x:Name="txtExamStartTime" Style="{StaticResource InputTextBox}" Text="08:00"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" VerticalAlignment="Bottom" Margin="0,0,0,6">
+                                                <CheckBox x:Name="chkManualOpenExam" Content="Giáo viên mở đề thủ công ngay" IsChecked="False" FontSize="12.5" FontWeight="SemiBold" Foreground="#1E3A8A"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
                                 <!-- Matrix Auto Builder Box -->
                                 <Border Background="#F8FAFC"
                                         BorderBrush="#CBD5E1"
@@ -497,7 +524,7 @@
                                         Padding="12,10"
                                         Margin="0,0,0,12">
                                     <StackPanel>
-                                        <TextBlock Text="🎲 Tạo đề ngẫu nhiên theo Ma trận độ khó (Tùy chọn):"
+                                        <TextBlock Text="🎲 Tạo đề ngẫu nhiên theo Ma trận độ khó:"
                                                    FontSize="12"
                                                    FontWeight="Bold"
                                                    Foreground="#1E293B"/>
@@ -644,9 +671,9 @@
                                               VerticalContentAlignment="Center"
                                               SelectionChanged="CboFilterDifficulty_SelectionChanged">
                                         <ComboBoxItem Content="Tất cả" Tag="All"/>
-                                        <ComboBoxItem Content="Dễ (Easy)" Tag="Easy"/>
+                                        <ComboBoxItem Content="Dễ" Tag="Easy"/>
                                         <ComboBoxItem Content="Trung bình" Tag="Medium"/>
-                                        <ComboBoxItem Content="Khó (Hard)" Tag="Hard"/>
+                                        <ComboBoxItem Content="Khó" Tag="Hard"/>
                                     </ComboBox>
                                 </StackPanel>
                                 <Button Grid.Column="2"
@@ -664,8 +691,8 @@
                             </Grid>
 
                             <Grid Grid.Row="2" Margin="0,0,0,8">
-                                <TextBlock x:Name="txtQuestionListCount" Text="Danh sách câu hỏi (0)" FontSize="14.5" FontWeight="Bold" Foreground="#1E293B" VerticalAlignment="Center"/>
-                                <TextBlock Text="Nhấn vào một câu hỏi để chỉnh sửa hoặc xóa" FontSize="12" Foreground="#64748B" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="txtQuestionListCount" Text="Danh sách câu hỏi: 0" FontSize="14.5" FontWeight="Bold" Foreground="#1E293B" VerticalAlignment="Center"/>
+
                             </Grid>
 
                             <ListBox Grid.Row="3"
@@ -766,7 +793,7 @@
                                                    FontSize="18"
                                                    FontWeight="Bold"
                                                    Foreground="#1E293B"/>
-                                        <TextBlock x:Name="txtQuestionEditorExamSubtitle"
+                                        <TextBlock x:Name="txtQuestionEditorExamSubtitle" Visibility="Collapsed"
                                                    Text="Đề đang thực hiện: ..."
                                                    FontSize="13"
                                                    FontWeight="SemiBold"
@@ -798,9 +825,9 @@
                                     <StackPanel Grid.Column="1">
                                         <TextBlock Text="Mức độ khó" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
                                         <ComboBox x:Name="cboQDifficulty" Height="36" SelectedIndex="0" FontSize="13" VerticalContentAlignment="Center">
-                                            <ComboBoxItem Content="Dễ (Easy)" Tag="Easy"/>
-                                            <ComboBoxItem Content="Trung bình (Medium)" Tag="Medium"/>
-                                            <ComboBoxItem Content="Khó (Hard)" Tag="Hard"/>
+                                            <ComboBoxItem Content="Dễ" Tag="Easy"/>
+                                            <ComboBoxItem Content="Trung bình" Tag="Medium"/>
+                                            <ComboBoxItem Content="Khó" Tag="Hard"/>
                                         </ComboBox>
                                     </StackPanel>
                                 </Grid>
@@ -852,11 +879,11 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                        <TextBlock Text="Đáp án đúng (VD: A hoặc A,C)" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
+                                        <TextBlock Text="Đáp án đúng" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
                                         <TextBox x:Name="txtQCorrectInput" Style="{StaticResource InputTextBox}" Text="A" FontWeight="Bold"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1">
-                                        <TextBlock Text="Giải thích đáp án (hiển thị khi xem lại)" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
+                                        <TextBlock Text="Giải thích đáp án" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
                                         <TextBox x:Name="txtQExplanation" Style="{StaticResource InputTextBox}"/>
                                     </StackPanel>
                                 </Grid>
@@ -911,7 +938,7 @@
                             <Grid Grid.Row="0" Margin="0,0,0,12">
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="Danh mục Môn học hiện có" FontSize="17" FontWeight="Bold" Foreground="#1E293B"/>
-                                    <TextBlock Text="Nhấn vào một môn học bên dưới để chỉnh sửa thông tin và quản lý danh sách chương học" FontSize="12" Foreground="#64748B" Margin="0,2,0,0"/>
+
                                 </StackPanel>
                                 <Button Content="+ Thêm môn học mới"
                                         HorizontalAlignment="Right"
@@ -1192,8 +1219,8 @@
 
                                                     <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
                                                         <TextBlock Text="{Binding ScoreText}" FontSize="16.5" FontWeight="Bold" Foreground="#2563EB" HorizontalAlignment="Right"/>
-                                                        <Border Background="{Binding StatusBadgeBg}" CornerRadius="5" Padding="9,3" Margin="0,4,0,0" HorizontalAlignment="Right">
-                                                            <TextBlock Text="{Binding StatusBadgeText}" Foreground="{Binding StatusBadgeFg}" FontSize="11" FontWeight="Bold"/>
+                                                        <Border CornerRadius="5" Padding="9,3" Margin="0,4,0,0" HorizontalAlignment="Right"><Border.Style><Style TargetType="Border"><Setter Property="Background" Value="#FEE2E2"/><Style.Triggers><DataTrigger Binding="{Binding IsPassed}" Value="True"><Setter Property="Background" Value="#DCFCE7"/></DataTrigger></Style.Triggers></Style></Border.Style>
+                                                            <TextBlock Text="{Binding StatusBadgeText}" FontSize="11" FontWeight="Bold"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Foreground" Value="#B91C1C"/><Style.Triggers><DataTrigger Binding="{Binding IsPassed}" Value="True"><Setter Property="Foreground" Value="#15803D"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
                                                         </Border>
                                                     </StackPanel>
                                                 </Grid>
@@ -1319,7 +1346,7 @@
                             <Grid Grid.Row="0" Margin="0,0,0,12">
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="Danh sách Tài khoản hệ thống" FontSize="17" FontWeight="Bold" Foreground="#1E293B"/>
-                                    <TextBlock Text="Quản lý tài khoản Giáo viên (Admin) và Học sinh (Thí sinh)" FontSize="12" Foreground="#64748B" Margin="0,2,0,0"/>
+
                                 </StackPanel>
                                 <Button Content="+ Thêm tài khoản mới"
                                         HorizontalAlignment="Right"
@@ -1358,8 +1385,8 @@
                                               VerticalContentAlignment="Center"
                                               SelectionChanged="CboFilterUserRole_SelectionChanged">
                                         <ComboBoxItem Content="Tất cả vai trò" Tag="All"/>
-                                        <ComboBoxItem Content="Giáo viên (Admin)" Tag="Admin"/>
-                                        <ComboBoxItem Content="Học sinh (Thí sinh)" Tag="User"/>
+                                        <ComboBoxItem Content="Giáo viên" Tag="Admin"/>
+                                        <ComboBoxItem Content="Học sinh" Tag="User"/>
                                     </ComboBox>
                                 </StackPanel>
 
@@ -1397,19 +1424,19 @@
                                                     <TextBlock FontSize="12.5" Foreground="#475569" Margin="0,4,0,0">
                                                         <Run Text="Tên đăng nhập: "/>
                                                         <Run Text="{Binding Username, Mode=OneWay}" FontWeight="Bold" Foreground="#2563EB"/>
-                                                        <Run Text="   •   "/>
-                                                        <Run Text="{Binding CreatedAtDisplay, Mode=OneWay}" Foreground="#64748B"/>
+
+
                                                     </TextBlock>
                                                 </StackPanel>
 
                                                 <Border Grid.Column="1"
-                                                        Background="{Binding RoleBadgeBg}"
+                                                        Style="{StaticResource RoleBadgeBorderStyle}"
                                                         CornerRadius="6"
                                                         Padding="12,6"
                                                         Margin="0,0,12,0"
                                                         VerticalAlignment="Center">
                                                     <TextBlock Text="{Binding RoleDisplay}"
-                                                               Foreground="{Binding RoleBadgeFg}"
+                                                               Style="{StaticResource RoleBadgeTextStyle}"
                                                                FontSize="12"
                                                                FontWeight="Bold"/>
                                                 </Border>
@@ -1464,7 +1491,7 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                        <TextBlock Text="Tên đăng nhập (Username)" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
+                                        <TextBlock Text="Tên đăng nhập" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
                                         <TextBox x:Name="txtUserUsername" Style="{StaticResource InputTextBox}"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Margin="10,0,0,0">
@@ -1483,10 +1510,10 @@
                                         <TextBox x:Name="txtUserPassword" Style="{StaticResource InputTextBox}"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                                        <TextBlock Text="Phân quyền (Vai trò)" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
+                                        <TextBlock Text="Phân quyền" FontSize="12" FontWeight="SemiBold" Foreground="#475569" Margin="0,0,0,4"/>
                                         <ComboBox x:Name="cboUserRole" Height="36" SelectedIndex="0" FontSize="13" VerticalContentAlignment="Center">
-                                            <ComboBoxItem Content="Học sinh (Thí sinh)" Tag="User"/>
-                                            <ComboBoxItem Content="Giáo viên (Admin)" Tag="Admin"/>
+                                            <ComboBoxItem Content="Học sinh" Tag="User"/>
+                                            <ComboBoxItem Content="Giáo viên" Tag="Admin"/>
                                         </ComboBox>
                                     </StackPanel>
                                 </Grid>

@@ -105,97 +105,20 @@
                                LineHeight="22"
                                TextWrapping="Wrap"/>
                 </StackPanel>
-
-                <!-- Quick Demo Accounts & Server Status Box -->
-                <StackPanel Grid.Row="2">
-                    <Border Background="#1E3A8A"
-                            BorderBrush="#3B82F6"
-                            BorderThickness="1"
-                            CornerRadius="10"
-                            Padding="14,12">
-                        <StackPanel>
-                            <TextBlock Text="TÀI KHOẢN DEMO CÓ SẴN (Bấm để điền nhanh):"
-                                       Foreground="#93C5FD"
-                                       FontSize="10.5"
-                                       FontWeight="Bold"
-                                       Margin="0,0,0,8"/>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <Button Grid.Column="0"
-                                        Content="⚡ Quản trị (admin)"
-                                        Background="#2563EB"
-                                        Foreground="White"
-                                        BorderThickness="0"
-                                        Padding="8,7"
-                                        Margin="0,0,5,0"
-                                        FontSize="11"
-                                        FontWeight="SemiBold"
-                                        Cursor="Hand"
-                                        Click="BtnFillAdmin_Click"/>
-                                <Button Grid.Column="1"
-                                        Content="🎓 Học viên (hocvien)"
-                                        Background="#0D9488"
-                                        Foreground="White"
-                                        BorderThickness="0"
-                                        Padding="8,7"
-                                        Margin="5,0,0,0"
-                                        FontSize="11"
-                                        FontWeight="SemiBold"
-                                        Cursor="Hand"
-                                        Click="BtnFillStudent_Click"/>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- LAN Server Info & Config Button -->
-                    <Border Background="#0F172A"
-                            BorderBrush="#334155"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Padding="12,8"
-                            Margin="0,10,0,0">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                <TextBlock Text="MÁY CHỦ CSDL (MYSQL LAN)" Foreground="#94A3B8" FontSize="9.5" FontWeight="Bold"/>
-                                <TextBlock x:Name="txtServerStatus" Text="127.0.0.1:3306 (QuizzAppDB)" Foreground="#38BDF8" FontSize="11.5" FontWeight="SemiBold" Margin="0,2,0,0"/>
-                            </StackPanel>
-                            <Button Grid.Column="1"
-                                    Content="⚙ Cấu hình LAN"
-                                    Background="#1E293B"
-                                    Foreground="#E2E8F0"
-                                    BorderBrush="#475569"
-                                    BorderThickness="1"
-                                    Padding="10,5"
-                                    FontSize="11"
-                                    FontWeight="SemiBold"
-                                    Cursor="Hand"
-                                    VerticalAlignment="Center"
-                                    Click="BtnOpenServerConfig_Click"/>
-                        </Grid>
-                    </Border>
-                </StackPanel>
             </Grid>
         </Border>
 
-        <!-- RIGHT LOGIN / REGISTER / SERVER CONFIG FORM -->
+        <!-- RIGHT LOGIN / REGISTER FORM -->
         <Border Grid.Column="1" Background="White" Padding="48,32">
             <Grid VerticalAlignment="Center" MaxWidth="430">
 
-                <!-- PANEL 1: LOGIN & REGISTER -->
                 <StackPanel x:Name="panelAuthForm" Visibility="Visible">
-                    <TextBlock x:Name="txtFormTitle"
+                    <TextBlock x:Name="txtFormTitle" Margin="0,0,0,20"
                                Text="Đăng nhập tài khoản"
                                FontSize="24"
                                FontWeight="Bold"
                                Foreground="#1E293B"/>
-                    <TextBlock x:Name="txtFormSubtitle"
+                    <TextBlock x:Name="txtFormSubtitle" Visibility="Collapsed"
                                Text="Nhập thông tin tài khoản để truy cập hệ thống"
                                FontSize="12"
                                Foreground="#64748B"
@@ -210,7 +133,7 @@
                     <!-- Username -->
                     <StackPanel Margin="0,0,0,14">
                         <TextBlock Text="Tên đăng nhập" FontSize="12" FontWeight="SemiBold" Foreground="#334155" Margin="0,0,0,6"/>
-                        <TextBox x:Name="txtUsername" Style="{StaticResource FormTextBox}" Text="admin"/>
+                        <TextBox x:Name="txtUsername" Style="{StaticResource FormTextBox}"/>
                     </StackPanel>
 
                     <!-- Password -->
@@ -261,77 +184,6 @@
                                 Cursor="Hand"
                                 Click="BtnToggleMode_Click"/>
                     </StackPanel>
-                </StackPanel>
-
-                <!-- PANEL 2: LAN SERVER CONFIGURATION -->
-                <StackPanel x:Name="panelServerConfig" Visibility="Collapsed">
-                    <TextBlock Text="Cấu hình Máy chủ MySQL (LAN)"
-                               FontSize="22"
-                               FontWeight="Bold"
-                               Foreground="#1E293B"/>
-                    <TextBlock Text="Nhập địa chỉ IP của máy chủ chạy MySQL để nhiều máy trạm kết nối dùng chung cơ sở dữ liệu."
-                               FontSize="12"
-                               Foreground="#64748B"
-                               TextWrapping="Wrap"
-                               Margin="0,6,0,18"/>
-
-                    <Grid Margin="0,0,0,12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="2.2*"/>
-                            <ColumnDefinition Width="1*"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                            <TextBlock Text="Địa chỉ IP Máy chủ (Server Host)" FontSize="12" FontWeight="SemiBold" Foreground="#334155" Margin="0,0,0,6"/>
-                            <TextBox x:Name="txtCfgHost" Style="{StaticResource FormTextBox}" Text="127.0.0.1"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
-                            <TextBlock Text="Cổng (Port)" FontSize="12" FontWeight="SemiBold" Foreground="#334155" Margin="0,0,0,6"/>
-                            <TextBox x:Name="txtCfgPort" Style="{StaticResource FormTextBox}" Text="3306"/>
-                        </StackPanel>
-                    </Grid>
-
-                    <StackPanel Margin="0,0,0,12">
-                        <TextBlock Text="Tên Cơ sở dữ liệu (Database Name)" FontSize="12" FontWeight="SemiBold" Foreground="#334155" Margin="0,0,0,6"/>
-                        <TextBox x:Name="txtCfgDbName" Style="{StaticResource FormTextBox}" Text="QuizzAppDB"/>
-                    </StackPanel>
-
-                    <Grid Margin="0,0,0,12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                            <TextBlock Text="Tài khoản MySQL (User)" FontSize="12" FontWeight="SemiBold" Foreground="#334155" Margin="0,0,0,6"/>
-                            <TextBox x:Name="txtCfgUser" Style="{StaticResource FormTextBox}" Text="root"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
-                            <TextBlock Text="Mật khẩu MySQL" FontSize="12" FontWeight="SemiBold" Foreground="#334155" Margin="0,0,0,6"/>
-                            <PasswordBox x:Name="txtCfgPass" Style="{StaticResource FormPasswordBox}"/>
-                        </StackPanel>
-                    </Grid>
-
-                    <TextBlock x:Name="txtServerConfigMsg"
-                               Text=""
-                               FontSize="12"
-                               FontWeight="SemiBold"
-                               Visibility="Collapsed"
-                               TextWrapping="Wrap"
-                               Margin="0,4,0,8"/>
-
-                    <Button Content="🔌 Kiểm tra &amp; Lưu kết nối"
-                            Style="{StaticResource PrimaryButton}"
-                            Margin="0,8,0,12"
-                            Click="BtnSaveServerConfig_Click"/>
-
-                    <Button Content="← Quay lại màn hình đăng nhập"
-                            Background="Transparent"
-                            Foreground="#475569"
-                            BorderThickness="0"
-                            FontSize="12"
-                            FontWeight="SemiBold"
-                            HorizontalAlignment="Center"
-                            Cursor="Hand"
-                            Click="BtnCloseServerConfig_Click"/>
                 </StackPanel>
 
             </Grid>

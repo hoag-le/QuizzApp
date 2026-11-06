@@ -1,8 +1,8 @@
 using System;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Input;
-using System.Windows.Media;
 
 using QuizzApp.BLL;
 
@@ -18,121 +18,73 @@ namespace QuizzApp.GUI
         public LoginWindow()
         {
             InitializeComponent();
-            UpdateServerStatusBadge();
             LoadRememberedUser();
 
             try
             {
                 QuizService.InitializeDatabase();
             }
-            catch (Exception ex)
+            catch
             {
-                OpenServerConfigPanel();
-                ShowServerConfigMessage(
-                    string.Format("Không kết nối được tới MySQL ({0}). Vui lòng kiểm tra IP máy chủ LAN hoặc cấu hình kết nối bên dưới.\nChi tiết: {1}",
-                        QuizService.GetServerSummaryText(), ex.Message),
-                    isError: true);
+                // Nếu máy chủ CSDL chưa sẵn sàng lúc khởi động, hệ thống sẽ thử lại khi nhấn Đăng nhập
             }
         }
 
-        private void UpdateServerStatusBadge()
+        private static string ProtectRememberedPassword(string plainPassword)
         {
-            QuizService.GetServerConfig(out string host, out string port, out string dbName, out string user, out string pass);
-            txtServerStatus.Text = string.Format("{0}:{1} ({2})", host, port, dbName);
-            txtCfgHost.Text = host;
-            txtCfgPort.Text = port;
-            txtCfgDbName.Text = dbName;
-            txtCfgUser.Text = user;
-            txtCfgPass.Password = pass;
+            if (string.IsNullOrEmpty(plainPassword)) return "";
+            byte[] raw = Encoding.UTF8.GetBytes("QM_REM_V1:" + plainPassword);
+            return Convert.ToBase64String(raw);
+        }
+
+        private static string UnprotectRememberedPassword(string encoded)
+        {
+            if (string.IsNullOrWhiteSpace(encoded)) return "";
+            try
+            {
+                byte[] bytes = Convert.FromBase64String(encoded.Trim());
+                string decoded = Encoding.UTF8.GetString(bytes);
+                if (decoded.StartsWith("QM_REM_V1:", StringComparison.Ordinal))
+                {
+                    return decoded.Substring("QM_REM_V1:".Length);
+                }
+            }
+            catch
+            {
+            }
+            return "";
         }
 
         private void LoadRememberedUser()
         {
             if (File.Exists(RememberFile))
             {
-                string savedUser = File.ReadAllText(RememberFile).Trim();
-                if (!string.IsNullOrEmpty(savedUser))
+                try
                 {
-                    txtUsername.Text = savedUser;
-                    txtPassword.Password = "123456";
-                    chkRememberMe.IsChecked = true;
-                    return;
+                    string[] lines = File.ReadAllLines(RememberFile, Encoding.UTF8);
+                    if (lines.Length > 0 && !string.IsNullOrWhiteSpace(lines[0]))
+                    {
+                        string savedUser = lines[0].Trim();
+                        txtUsername.Text = savedUser;
+                        if (lines.Length > 1)
+                        {
+                            txtPassword.Password = UnprotectRememberedPassword(lines[1]);
+                        }
+                        else
+                        {
+                            txtPassword.Password = "";
+                        }
+                        chkRememberMe.IsChecked = true;
+                        return;
+                    }
+                }
+                catch
+                {
                 }
             }
-            txtUsername.Text = "admin";
-            txtPassword.Password = "123456";
-        }
-
-        private void BtnOpenServerConfig_Click(object sender, RoutedEventArgs e)
-        {
-            OpenServerConfigPanel();
-        }
-
-        private void OpenServerConfigPanel()
-        {
-            UpdateServerStatusBadge();
-            txtServerConfigMsg.Visibility = Visibility.Collapsed;
-            panelAuthForm.Visibility = Visibility.Collapsed;
-            panelServerConfig.Visibility = Visibility.Visible;
-        }
-
-        private void BtnCloseServerConfig_Click(object sender, RoutedEventArgs e)
-        {
-            panelServerConfig.Visibility = Visibility.Collapsed;
-            panelAuthForm.Visibility = Visibility.Visible;
-        }
-
-        private void BtnSaveServerConfig_Click(object sender, RoutedEventArgs e)
-        {
-            string host = txtCfgHost.Text.Trim();
-            string port = txtCfgPort.Text.Trim();
-            string dbName = txtCfgDbName.Text.Trim();
-            string user = txtCfgUser.Text.Trim();
-            string pass = txtCfgPass.Password;
-
-            if (QuizService.ConfigureServerConnection(host, port, dbName, user, pass, out string errorMsg))
-            {
-                UpdateServerStatusBadge();
-                ShowServerConfigMessage("Kết nối máy chủ MySQL thành công! Đã lưu cấu hình và đồng bộ dữ liệu.", isError: false);
-                MessageBox.Show(
-                    string.Format("Đã kết nối thành công tới máy chủ MySQL:\n{0}:{1} (CSDL: {2})", host, port, dbName),
-                    "Kết nối LAN thành công",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-                panelServerConfig.Visibility = Visibility.Collapsed;
-                panelAuthForm.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                ShowServerConfigMessage("Không thể kết nối: " + errorMsg, isError: true);
-            }
-        }
-
-        private void ShowServerConfigMessage(string msg, bool isError)
-        {
-            txtServerConfigMsg.Text = msg;
-            txtServerConfigMsg.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isError ? "#DC2626" : "#15803D"));
-            txtServerConfigMsg.Visibility = Visibility.Visible;
-        }
-
-        private void BtnFillAdmin_Click(object sender, RoutedEventArgs e)
-        {
-            panelServerConfig.Visibility = Visibility.Collapsed;
-            panelAuthForm.Visibility = Visibility.Visible;
-            if (_isRegisterMode) ToggleMode();
-            txtUsername.Text = "admin";
-            txtPassword.Password = "123456";
-            txtError.Visibility = Visibility.Collapsed;
-        }
-
-        private void BtnFillStudent_Click(object sender, RoutedEventArgs e)
-        {
-            panelServerConfig.Visibility = Visibility.Collapsed;
-            panelAuthForm.Visibility = Visibility.Visible;
-            if (_isRegisterMode) ToggleMode();
-            txtUsername.Text = "hocvien";
-            txtPassword.Password = "123456";
-            txtError.Visibility = Visibility.Collapsed;
+            txtUsername.Text = "";
+            txtPassword.Password = "";
+            chkRememberMe.IsChecked = false;
         }
 
         private void BtnToggleMode_Click(object sender, RoutedEventArgs e)
@@ -194,6 +146,8 @@ namespace QuizzApp.GUI
 
             try
             {
+                QuizService.InitializeDatabase();
+
                 if (_isRegisterMode)
                 {
                     string fullName = txtFullName.Text.Trim();
@@ -219,7 +173,7 @@ namespace QuizzApp.GUI
                     }
                     else
                     {
-                        ShowError(string.Format("Tên đăng nhập hoặc mật khẩu không chính xác! (Lần thử {0}/5)", _failedAttempts));
+                        ShowError("Tên đăng nhập hoặc mật khẩu không chính xác!");
                     }
                     return;
                 }
@@ -228,9 +182,17 @@ namespace QuizzApp.GUI
                 try
                 {
                     if (chkRememberMe.IsChecked == true)
-                        File.WriteAllText(RememberFile, username);
+                    {
+                        File.WriteAllLines(RememberFile, new[]
+                        {
+                            username,
+                            ProtectRememberedPassword(password)
+                        }, Encoding.UTF8);
+                    }
                     else if (File.Exists(RememberFile))
+                    {
                         File.Delete(RememberFile);
+                    }
                 }
                 catch { }
 
